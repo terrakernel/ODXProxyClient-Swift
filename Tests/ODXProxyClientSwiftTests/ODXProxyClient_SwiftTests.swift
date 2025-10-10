@@ -22,20 +22,13 @@ struct ODXProxyClientIntegrationTests {
     @Test("Search Read - Live API Call", .tags(.integration, .network))
     func searchRead_withValidCredentials_shouldSucceed() async throws {
         
-//        let gatewayURL = try #require(ProcessInfo.processInfo.environment["ODX_GATEWAY_URL"])
-//        let odxAPIKey = try #require(ProcessInfo.processInfo.environment["ODX_API_KEY"])
-//        let odooURL = try #require(ProcessInfo.processInfo.environment["ODOO_URL"])
-//        let odooDB = try #require(ProcessInfo.processInfo.environment["ODOO_DB"])
-//        let odooUserIDString = try #require(ProcessInfo.processInfo.environment["ODOO_USER_ID"])
-//        let odooUserID = try #require(Int(odooUserIDString))
-//        let odooAPIKey = try #require(ProcessInfo.processInfo.environment["ODOO_API_KEY"])
-        
-        let gatewayURL = "https://gateway.odxproxy.io"
-        let odxAPIKey = "9ThdEhEMdIumAMFsmQLn885uBDWmvYsL"
-        let odooURL = "https://edu-kti-0125.odoo.com/"
-        let odooDB = "edu-kti-0125"
-        let odooUserID = 2
-        let odooAPIKey = "a3b0596914ac6d77d51e9cde9a9146be816b7bd8"
+        let gatewayURL = try #require(ProcessInfo.processInfo.environment["ODX_GATEWAY_URL"])
+        let odxAPIKey = try #require(ProcessInfo.processInfo.environment["ODX_API_KEY"])
+        let odooURL = try #require(ProcessInfo.processInfo.environment["ODOO_URL"])
+        let odooDB = try #require(ProcessInfo.processInfo.environment["ODOO_DB"])
+        let odooUserIDString = try #require(ProcessInfo.processInfo.environment["ODOO_USER_ID"])
+        let odooUserID = try #require(Int(odooUserIDString))
+        let odooAPIKey = try #require(ProcessInfo.processInfo.environment["ODOO_API_KEY"])
         
         let odooInstance = OdxInstanceInfo(url: odooURL, userId: odooUserID, db: odooDB, apiKey: odooAPIKey)
         let clientInfo = OdxProxyClientInfo(instance: odooInstance, odxApiKey: odxAPIKey, gatewayUrl: gatewayURL)
