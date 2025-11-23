@@ -39,7 +39,7 @@ public final class OdxProxyClient {
         return odooInstance
     }
 
-    internal func postRequest<T: Codable>(body: OdxClientRequest) async throws -> OdxServerResponse<T> {
+    internal func postRequest<T: Codable & Sendable>(body: OdxClientRequest) async throws -> OdxServerResponse<T> {
         guard let gatewayUrl = self.gatewayUrl else {
             throw OdxProxyError.notConfigured
         }
@@ -47,7 +47,9 @@ public final class OdxProxyClient {
         let url = gatewayUrl.appendingPathComponent("/api/odoo/execute")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        let encodedBody = try JSONEncoder().encode(body)
+        
+        // Handles big body gracefully
+        let encodedBody = try await JSONEncoder.encodeInBackground(body)
         request.httpBody = encodedBody
 
         do {
@@ -61,8 +63,8 @@ public final class OdxProxyClient {
                 let errorResponse = try? JSONDecoder().decode(OdxServerErrorResponse.self, from: data)
                 throw OdxProxyError.serverError(errorResponse ?? OdxServerErrorResponse(code: httpResponse.statusCode, message: "Unknown server error", data: nil))
             }
-            
-            let decodedResponse = try JSONDecoder().decode(OdxServerResponse<T>.self, from: data)
+            // Move to another thread so if a large json is returned wont stale the UI
+            let decodedResponse = try await JSONDecoder.decodeInBackground(OdxServerResponse<T>.self, from: data)
             return decodedResponse
         } catch let error as OdxProxyError {
             throw error
