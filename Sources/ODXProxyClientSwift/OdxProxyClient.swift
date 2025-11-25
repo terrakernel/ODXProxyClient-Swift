@@ -51,7 +51,7 @@ public final class OdxProxyClient {
         // Handles big body gracefully
         let encodedBody = try await JSONEncoder.encodeInBackground(body)
         request.httpBody = encodedBody
-
+        
         do {
             let (data, response) = try await api.data(for: request)
 
@@ -60,16 +60,15 @@ public final class OdxProxyClient {
             }
             
             guard (200...299).contains(httpResponse.statusCode) else {
-                let errorResponse = try? JSONDecoder().decode(OdxServerErrorResponse.self, from: data)
+                let errorResponse = try? await JSONDecoder.decodeInBackground(OdxServerErrorResponse.self, from: data)
                 throw OdxProxyError.serverError(errorResponse ?? OdxServerErrorResponse(code: httpResponse.statusCode, message: "Unknown server error", data: nil))
             }
             // Move to another thread so if a large json is returned wont stale the UI
             let decodedResponse = try await JSONDecoder.decodeInBackground(OdxServerResponse<T>.self, from: data)
+            if let error = decodedResponse.error {
+                throw OdxProxyError.serverError(error)
+            }
             return decodedResponse
-        } catch let error as OdxProxyError {
-            throw error
-        } catch {
-            throw OdxProxyError.networkError(error)
         }
     }
 }

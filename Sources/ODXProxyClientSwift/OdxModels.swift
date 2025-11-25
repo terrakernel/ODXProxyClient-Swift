@@ -371,8 +371,8 @@ public struct OdxServerErrorResponse: Codable, Error, Sendable {
 ///   - id: The integer ID of the related record.
 ///   - name: The display name of the related record.
 public struct OdxMany2One: Codable, Sendable {
-    let id: Int?
-    let name: String?
+    public let id: Int?
+    public let name: String?
 
     public init(id: Int?, name: String?) {
         self.id = id

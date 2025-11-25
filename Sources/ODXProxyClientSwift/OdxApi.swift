@@ -68,23 +68,6 @@ public enum OdxApi {
         return try await client().postRequest(body: body)
     }
     
-    public static func searchRead<T: Codable & Sendable>(model: String, params: OdxParams, keyword: OdxClientKeywordRequest, id: String? = nil) async throws -> OdxServerResponse<[T]> {
-        guard let odooInstance = client().getOdooInstance() else {
-            throw OdxProxyError.notConfigured
-        }
-        
-        let body = OdxClientRequest(
-            id: id ?? ULID().ulidString,
-            action: "search_read",
-            modelId: model,
-            keyword: keyword,
-            params: params,
-            odooInstance: odooInstance
-        )
-
-        return try await client().postRequest(body: body)
-    }
-
     /// Executes an Odoo `search_read` RPC call and returns a typed list of records.
     ///
     /// This method performs the combined `search_read` operation commonly used in Odoo,
@@ -129,6 +112,24 @@ public enum OdxApi {
     ///
     /// print(partners.result.first?.name ?? "none")
     /// ```
+    public static func searchRead<T: Codable & Sendable>(model: String, params: OdxParams, keyword: OdxClientKeywordRequest, id: String? = nil) async throws -> OdxServerResponse<[T]> {
+        guard let odooInstance = client().getOdooInstance() else {
+            throw OdxProxyError.notConfigured
+        }
+        
+        let body = OdxClientRequest(
+            id: id ?? ULID().ulidString,
+            action: "search_read",
+            modelId: model,
+            keyword: keyword,
+            params: params,
+            odooInstance: odooInstance
+        )
+
+        return try await client().postRequest(body: body)
+    }
+
+    
     public static func read<T: Codable & Sendable>(model: String, params: OdxParams, keyword: OdxClientKeywordRequest, id: String? = nil) async throws -> OdxServerResponse<T> {
         var kCopy = keyword
         kCopy.order = nil
@@ -149,29 +150,6 @@ public enum OdxApi {
             odooInstance: odooInstance
         )
 
-        return try await client().postRequest(body: body)
-    }
-
-    public static func fieldsGet<T: Codable & Sendable>(model: String, keyword: OdxClientKeywordRequest, id: String? = nil) async throws -> OdxServerResponse<T> {
-        var kCopy = keyword
-        kCopy.order = nil
-        kCopy.limit = nil
-        kCopy.offset = nil
-        kCopy.fields = nil
-
-        guard let odooInstance = client().getOdooInstance() else {
-            throw OdxProxyError.notConfigured
-        }
-
-        let body = OdxClientRequest(
-            id: id ?? ULID().ulidString,
-            action: "fields_get",
-            modelId: model,
-            keyword: kCopy,
-            params: OdxParams([]),
-            odooInstance: odooInstance
-        )
-        
         return try await client().postRequest(body: body)
     }
 
@@ -225,6 +203,47 @@ public enum OdxApi {
     ///
     /// print(fields.result["name"]?.type ?? "Unknown")
     /// ```
+    public static func fieldsGet<T: Codable & Sendable>(model: String, keyword: OdxClientKeywordRequest, id: String? = nil) async throws -> OdxServerResponse<T> {
+        var kCopy = keyword
+        kCopy.order = nil
+        kCopy.limit = nil
+        kCopy.offset = nil
+        kCopy.fields = nil
+
+        guard let odooInstance = client().getOdooInstance() else {
+            throw OdxProxyError.notConfigured
+        }
+
+        let body = OdxClientRequest(
+            id: id ?? ULID().ulidString,
+            action: "fields_get",
+            modelId: model,
+            keyword: kCopy,
+            params: OdxParams([]),
+            odooInstance: odooInstance
+        )
+        
+        return try await client().postRequest(body: body)
+    }
+
+    /// Counts the number of records matching the given search domain.
+    ///
+    /// This method sends a `search_count` request to the Odoo backend and
+    /// returns the number of records that match the provided `params` and `keyword`.
+    ///
+    /// The `keyword` fields related to pagination (`order`, `limit`, `offset`, `fields`)
+    /// are removed because `search_count` does not use them.
+    ///
+    /// - Parameters:
+    ///   - model: The Odoo model name to query (e.g., `"res.partner"`).
+    ///   - params: The domain parameters (`OdxParams`) used to filter records.
+    ///   - keyword: An `OdxClientKeywordRequest` used for additional filters.
+    ///              Pagination-related properties are ignored for this action.
+    ///   - id: Optional request identifier. If omitted, a ULID will be generated.
+    /// - Returns: An `OdxServerResponse<Int>` containing the count of matching records.
+    /// - Throws: `OdxProxyError.notConfigured` if the Odoo instance is not configured,
+    ///           or any networking/decoding errors from `postRequest`.
+    ///
     public static func searchCount(model: String, params: OdxParams, keyword: OdxClientKeywordRequest, id: String? = nil) async throws -> OdxServerResponse<Int> {
         var kCopy = keyword
         kCopy.order = nil
