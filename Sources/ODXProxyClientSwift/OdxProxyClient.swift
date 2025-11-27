@@ -60,8 +60,9 @@ public final class OdxProxyClient {
             }
             
             guard (200...299).contains(httpResponse.statusCode) else {
-                let errorResponse = try? await JSONDecoder.decodeInBackground(OdxServerErrorResponse.self, from: data)
-                throw OdxProxyError.serverError(errorResponse ?? OdxServerErrorResponse(code: httpResponse.statusCode, message: "Unknown server error", data: nil))
+                let x = String(data: data, encoding: .utf8)
+                let errorResponse = try? await JSONDecoder.decodeInBackground(OdxServerResponse<T>.self, from: data)
+                throw OdxProxyError.serverError(errorResponse?.error ?? OdxServerErrorResponse(code: httpResponse.statusCode, message: "Unknown server error", data: nil))
             }
             // Move to another thread so if a large json is returned wont stale the UI
             let decodedResponse = try await JSONDecoder.decodeInBackground(OdxServerResponse<T>.self, from: data)

@@ -273,6 +273,23 @@ public struct OdxServerResponse<T: Codable & Sendable>: Codable, Sendable {
     public let result: T?
     public let error: OdxServerErrorResponse?
     
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+            jsonrpc = try container.decode(String.self, forKey: .jsonrpc)
+
+            if let idInt = try? container.decode(Int.self, forKey: .id) {
+                id = String(idInt)
+            } else if let idStr = try? container.decode(String.self, forKey: .id) {
+                id = idStr
+            } else {
+                id = ""
+            }
+
+            result = try? container.decode(T.self, forKey: .result)
+            error  = try? container.decode(OdxServerErrorResponse.self, forKey: .error)
+    }
+    
     public init(jsonrpc: String, id: String, result: T?, error: OdxServerErrorResponse?) {
         self.jsonrpc = jsonrpc
         self.id = id
