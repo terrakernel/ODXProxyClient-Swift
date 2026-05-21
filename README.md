@@ -46,6 +46,70 @@ targets: [
 
 ---
 
+## Quick start
+
+The smallest working end-to-end example: configure once in `App.init()`, then call from a view. The whole library follows this two-step pattern.
+
+```swift
+import SwiftUI
+import ODXProxyClientSwift
+
+@main
+struct MyApp: App {
+    init() {
+        OdxProxyClient.shared.configure(
+            with: OdxProxyClientInfo(
+                instance: OdxInstanceInfo(
+                    url: "https://erp.example.com",
+                    userId: 2,
+                    db: "prod",
+                    apiKey: "<odoo user api key>"
+                ),
+                odxApiKey: "<proxy x-api-key>",
+                gatewayUrl: "https://gateway.odxproxy.io"
+            )
+        )
+    }
+    var body: some Scene { WindowGroup { ContentView() } }
+}
+
+struct Partner: Codable, Identifiable, Sendable {
+    let id: Int
+    let name: String
+}
+
+struct ContentView: View {
+    @State private var partners: [Partner] = []
+
+    var body: some View {
+        List(partners) { Text($0.name) }
+            .task {
+                let context = OdxClientRequestContext(tz: "UTC")
+                let keyword = OdxClientKeywordRequest(fields: ["id", "name"], limit: 50, context: context)
+                let params  = OdxParams([[]] as [[Any]])    // empty domain = match all
+
+                // Return type annotation IS required for generic inference.
+                let response: OdxServerResponse<[Partner]> =
+                    try! await OdxApi.searchRead(model: "res.partner", params: params, keyword: keyword)
+
+                partners = response.result ?? []
+            }
+    }
+}
+```
+
+> [!IMPORTANT]
+> **Common gotchas — read these before writing code.**
+>
+> 1. **Generic returns must be annotated at the call site.** `let response: OdxServerResponse<[Partner]> = try await OdxApi.searchRead(...)` — Swift can't infer `T` from the call alone. If you omit the annotation, the call won't compile.
+> 2. **`try await` on every call.** Every `OdxApi.*` and `OdxOps.*` method is `async throws`.
+> 3. **Configure before any call.** Calling an API method before `OdxProxyClient.shared.configure(...)` throws `OdxProxyError.notConfigured`.
+> 4. **`@OdxOptional` requires `var`, not `let`.** Property wrappers can't wrap immutable stored properties.
+> 5. **`OdxParams([])` does NOT compile** — Swift can't infer the inner type. Use `OdxParams([[]] as [[Any]])` for an empty domain, or supply a typed inner array. See the [params cookbook](#5-building-params-with-odxparams).
+> 6. **`Partner` / `Product` / etc. are YOUR types**, not library types. Define a `Codable` struct that matches the `fields` you requested.
+
+---
+
 ## 1. Configuration — once, at app startup
 
 The client is a singleton (`OdxProxyClient.shared`). You configure it **once** and then call the API from anywhere. Configuration is synchronous and cheap, so the natural place is your SwiftUI `App.init()`.
@@ -259,11 +323,25 @@ All requests share the same `URLSession`, so connection reuse is automatic.
 
 ## 3. Data API reference (`OdxApi`)
 
-All methods are static `async throws` functions returning `OdxServerResponse<T>`. The default request id is an auto-generated string; pass `id:` if you want to trace specific requests.
+All methods are static `async throws` on the `OdxApi` enum. Each example below is self-contained — defines its own `keyword` / model struct — so it copy-pastes cleanly.
+
+> [!NOTE]
+> Every call needs `import ODXProxyClientSwift`. Every example below assumes the singleton has already been configured (see §1). All examples build a `keyword` inline because most methods take one — for repeated use, define it once at the top of your file or view model.
 
 ### `search` — return matching record IDs
 
 ```swift
+public static func search(
+    model: String,
+    params: OdxParams,
+    keyword: OdxClientKeywordRequest,
+    id: String? = nil
+) async throws -> OdxServerResponse<[Int]>
+```
+
+```swift
+let keyword = OdxClientKeywordRequest(context: OdxClientRequestContext(tz: "UTC"))
+
 let response = try await OdxApi.search(
     model: "res.partner",
     params: OdxParams([[["is_company", "=", true]]]),
@@ -275,19 +353,63 @@ let ids: [Int] = response.result ?? []
 ### `searchRead` — search and read in one call (most common)
 
 ```swift
+public static func searchRead<T: Codable & Sendable>(
+    model: String,
+    params: OdxParams,
+    keyword: OdxClientKeywordRequest,
+    id: String? = nil
+) async throws -> OdxServerResponse<[T]>
+```
+
+```swift
+struct Partner: Codable, Identifiable, Sendable {
+    let id: Int
+    let name: String
+}
+
+let keyword = OdxClientKeywordRequest(
+    fields: ["id", "name"],
+    limit: 50,
+    context: OdxClientRequestContext(tz: "UTC")
+)
+
 let response: OdxServerResponse<[Partner]> = try await OdxApi.searchRead(
     model: "res.partner",
     params: OdxParams([[["is_company", "=", true]]]),
     keyword: keyword
 )
+let partners: [Partner] = response.result ?? []
 ```
+
+> [!TIP]
+> The generic `T` is the **record** type, not the array. `searchRead` returns `OdxServerResponse<[T]>`, so you annotate with `[Partner]` and get `[Partner]?` in `result`.
 
 ### `read` — read specific records by id
 
 ```swift
+public static func read<T: Codable & Sendable>(
+    model: String,
+    params: OdxParams,
+    keyword: OdxClientKeywordRequest,
+    id: String? = nil
+) async throws -> OdxServerResponse<T>
+```
+
+```swift
+struct Partner: Codable, Identifiable, Sendable {
+    let id: Int
+    let name: String
+}
+
+let keyword = OdxClientKeywordRequest(
+    fields: ["id", "name"],
+    context: OdxClientRequestContext(tz: "UTC")
+)
+
+// params is [[ids]] — array containing one array of ids
 let response: OdxServerResponse<[Partner]> = try await OdxApi.read(
     model: "res.partner",
-    params: OdxParams([[1, 2, 3]] as [[Any]]),   // [[ids]]
+    params: OdxParams([[1, 2, 3]] as [[Any]]),
     keyword: keyword
 )
 ```
@@ -295,15 +417,38 @@ let response: OdxServerResponse<[Partner]> = try await OdxApi.read(
 ### `fieldsGet` — model schema (field types, help text, relations)
 
 ```swift
+public static func fieldsGet<T: Codable & Sendable>(
+    model: String,
+    keyword: OdxClientKeywordRequest,
+    id: String? = nil
+) async throws -> OdxServerResponse<T>
+```
+
+```swift
+let keyword = OdxClientKeywordRequest(context: OdxClientRequestContext(tz: "UTC"))
+
+// `T` is a dict of field-name → metadata. Use [String: AnyCodable] to accept any shape.
 let response: OdxServerResponse<[String: AnyCodable]> = try await OdxApi.fieldsGet(
     model: "res.partner",
     keyword: keyword
 )
+let schema = response.result ?? [:]
 ```
 
 ### `searchCount` — count matching records
 
 ```swift
+public static func searchCount(
+    model: String,
+    params: OdxParams,
+    keyword: OdxClientKeywordRequest,
+    id: String? = nil
+) async throws -> OdxServerResponse<Int>
+```
+
+```swift
+let keyword = OdxClientKeywordRequest(context: OdxClientRequestContext(tz: "UTC"))
+
 let response = try await OdxApi.searchCount(
     model: "res.partner",
     params: OdxParams([[["is_company", "=", true]]]),
@@ -315,6 +460,17 @@ let count: Int = response.result ?? 0
 ### `create` — create a record (or records)
 
 ```swift
+public static func create<T: Codable & Sendable>(
+    model: String,
+    params: OdxParams,
+    keyword: OdxClientKeywordRequest,
+    id: String? = nil
+) async throws -> OdxServerResponse<T>
+```
+
+```swift
+let keyword = OdxClientKeywordRequest(context: OdxClientRequestContext(tz: "UTC"))
+
 let response: OdxServerResponse<Int> = try await OdxApi.create(
     model: "res.partner",
     params: OdxParams([
@@ -322,12 +478,24 @@ let response: OdxServerResponse<Int> = try await OdxApi.create(
     ]),
     keyword: keyword
 )
-let newId = response.result   // newly created record id
+let newId: Int? = response.result
 ```
 
 ### `write` / `update` — update records by id
 
 ```swift
+public static func write<T: Codable & Sendable>(
+    model: String,
+    params: OdxParams,
+    keyword: OdxClientKeywordRequest,
+    id: String? = nil
+) async throws -> OdxServerResponse<T>
+```
+
+```swift
+let keyword = OdxClientKeywordRequest(context: OdxClientRequestContext(tz: "UTC"))
+
+// params shape: [ [ids], { fields: values } ]
 let response: OdxServerResponse<Bool> = try await OdxApi.write(
     model: "res.partner",
     params: OdxParams([[42], ["name": "Updated Name"]] as [Any]),
@@ -335,11 +503,22 @@ let response: OdxServerResponse<Bool> = try await OdxApi.write(
 )
 ```
 
-`OdxApi.update` is an alias of `write`.
+`OdxApi.update` is an alias of `write` with the identical signature.
 
 ### `remove` — delete records (unlink)
 
 ```swift
+public static func remove<T: Codable & Sendable>(
+    model: String,
+    params: OdxParams,
+    keyword: OdxClientKeywordRequest,
+    id: String? = nil
+) async throws -> OdxServerResponse<T>
+```
+
+```swift
+let keyword = OdxClientKeywordRequest(context: OdxClientRequestContext(tz: "UTC"))
+
 let response: OdxServerResponse<Bool> = try await OdxApi.remove(
     model: "res.partner",
     params: OdxParams([[42]] as [[Any]]),
@@ -350,6 +529,19 @@ let response: OdxServerResponse<Bool> = try await OdxApi.remove(
 ### `callMethod` — call any model method (custom or built-in)
 
 ```swift
+public static func callMethod<T: Codable & Sendable>(
+    model: String,
+    functionName: String,
+    params: OdxParams,
+    keyword: OdxClientKeywordRequest,
+    id: String? = nil
+) async throws -> OdxServerResponse<T>
+```
+
+```swift
+let orderId = 42
+let keyword = OdxClientKeywordRequest(context: OdxClientRequestContext(tz: "UTC"))
+
 let response: OdxServerResponse<Bool> = try await OdxApi.callMethod(
     model: "sale.order",
     functionName: "action_confirm",
@@ -363,13 +555,20 @@ An empty `functionName` throws `OdxProxyError.missingFunctionName` client-side �
 ### `version` — query the Odoo instance's version banner
 
 ```swift
+public static func version<T: Codable & Sendable>(
+    url: String? = nil,
+    id: String? = nil
+) async throws -> OdxServerResponse<T>
+```
+
+```swift
 struct VersionInfo: Codable, Sendable {
     let serverVersion: String?
     enum CodingKeys: String, CodingKey { case serverVersion = "server_version" }
 }
 
+// url defaults to the configured Odoo URL. Pass `url:` to query a different one.
 let response: OdxServerResponse<VersionInfo> = try await OdxApi.version()
-// Defaults to the configured Odoo URL. Pass `url:` to query a different one.
 ```
 
 ---
@@ -381,54 +580,151 @@ Operational, non-data endpoints. Kept separate from `OdxApi` per the proxy spec.
 ### `about` — proxy build identifier and version
 
 ```swift
+public static func about() async throws -> OdxServerResponse<OdxAboutInfo>
+```
+
+```swift
 let response = try await OdxOps.about()
 if let info = response.result {
     print("Proxy \(info.version) (build \(info.build))")
 }
 ```
 
+`OdxAboutInfo` is `{ build: String, version: String }`.
+
 ### `license` — proxy license status
+
+```swift
+public static func license() async throws -> OdxLicenseInfo
+```
 
 ```swift
 let info = try await OdxOps.license()
 print("\(info.licensee), valid until \(info.validUntil), valid: \(info.isValid)")
 ```
 
-Note `license()` returns `OdxLicenseInfo` directly (flat object), not wrapped in an envelope — this matches the proxy's response shape for this endpoint.
+> [!NOTE]
+> `license()` returns `OdxLicenseInfo` **directly**, not wrapped in `OdxServerResponse`. The proxy's `/_/license` endpoint emits a flat object, not a JSON-RPC envelope. This is the only method in the library that doesn't return an envelope.
+>
+> `OdxLicenseInfo` is `{ licensee: String, validUntil: String, isValid: Bool }`.
 
 ---
 
 ## 5. Building params with `OdxParams`
 
-`OdxParams` is a recursive enum that can hold any JSON shape Odoo expects. Use the `init(_ value: Any)` initializer to convert from native Swift values:
+`OdxParams` is a recursive enum (`.string` / `.number` / `.bool` / `.null` / `.array` / `.object`) that holds any JSON shape Odoo expects. The `init(_ value: Any)` initializer converts from native Swift values.
+
+### A 60-second primer on Odoo domains
+
+Odoo "domains" are the search filters you pass as `params` to `search`, `searchRead`, and `searchCount`. They're nested arrays:
+
+- Each **filter** is a 3-element array: `[field_name, operator, value]`
+- A **domain** is an array of filters: `[["field1", "=", v1], ["field2", "!=", v2]]`
+- Filters are **AND-ed** by default
+- For OR / NOT, prefix the domain with `"|"` (OR), `"&"` (AND, explicit), or `"!"` (NOT). Each prefix node applies to the **next two** terms (`"|"`/`"&"`) or **next one** term (`"!"`).
+- For data-API calls, the domain is the **first** positional arg to `execute_kw`, so the full `params` shape is `[[domain]]` — array containing one element, which is the domain itself.
+
+Common operators: `=`, `!=`, `>`, `<`, `>=`, `<=`, `in`, `not in`, `like`, `ilike`, `=ilike`, `child_of`, `parent_of`.
+
+Reference: [Odoo ORM domain documentation](https://www.odoo.com/documentation/16.0/developer/reference/backend/orm.html#search-domains).
+
+### Cookbook — every shape you'll actually need
+
+#### Empty domain (match all)
 
 ```swift
-// Empty domain (match all)
-let allParams = OdxParams([[]] as [[Any]])
+let p = OdxParams([[]] as [[Any]])
+```
 
-// Single filter triplet
-let companies = OdxParams([
+> [!CAUTION]
+> The `as [[Any]]` annotation matters. `OdxParams([[]])` may not compile or may infer the wrong inner type. The cast tells Swift the inner array is a heterogeneous `[Any]`.
+
+#### Single filter
+
+```swift
+let p = OdxParams([
     [["is_company", "=", true]]
 ])
+```
 
-// Multiple filter triplets (AND by default in Odoo)
-let activeCompanies = OdxParams([
+The double-nesting is correct: outer `[ ... ]` is the `params` positional-args array, the inner `[ ... ]` is the domain itself.
+
+#### Multiple filters (implicit AND)
+
+```swift
+let p = OdxParams([
     [
         ["is_company", "=", true],
         ["active", "=", true]
     ]
 ])
-
-// Create payload
-let newPartner = OdxParams([
-    ["name": "Acme", "email": "hello@acme.com", "is_company": true]
-])
-
-// Write payload: [[ids], { fields }]
-let updatePartner = OdxParams([[1, 2, 3], ["active": false]] as [Any])
 ```
 
-The initializer accepts `String`, `Int`, `Double`, `Bool`, `NSNull`, `[Any]`, and `[String: Any]`. Unsupported types fall back to `.null`.
+#### OR between two filters
+
+```swift
+let p = OdxParams([
+    [
+        "|",
+        ["email", "ilike", "@acme.com"],
+        ["name", "ilike", "Acme"]
+    ]
+])
+```
+
+#### NOT a filter
+
+```swift
+let p = OdxParams([
+    [
+        "!",
+        ["is_company", "=", true]
+    ]
+])
+```
+
+#### `in` operator
+
+```swift
+let p = OdxParams([
+    [
+        ["state", "in", ["draft", "sent"]]
+    ]
+])
+```
+
+#### Read by ids — `[[ids]]`
+
+```swift
+let p = OdxParams([[1, 2, 3]] as [[Any]])
+```
+
+#### Create payload — `[{ fields }]`
+
+```swift
+let p = OdxParams([
+    ["name": "Acme Inc", "is_company": true, "email": "hello@acme.com"]
+])
+```
+
+#### Write payload — `[[ids], { fields }]`
+
+```swift
+let p = OdxParams([[1, 2, 3], ["active": false]] as [Any])
+```
+
+The outer `as [Any]` is required because the two elements have different Swift types (`[Int]` vs `[String: Bool]`) — without the cast, Swift can't pick a common element type.
+
+#### `callMethod` payload — `[[args], { kwargs }]`
+
+```swift
+let orderId = 42
+let p = OdxParams([[orderId], ["context": ["lang": "en_US"]]] as [Any])
+```
+
+### Type acceptance
+
+`OdxParams.init(_ value: Any)` accepts: `String`, `Int`, `Double`, `Bool`, `NSNull`, `[Any]`, and `[String: Any]`. Anything else falls back to `.null` silently — if your params look empty server-side, check this first.
 
 ---
 
@@ -495,7 +791,10 @@ print(category.id ?? -1, category.name ?? "")
 
 ### `@OdxOptional` property wrapper
 
-For scalar fields where Odoo may return `false` to mean "unset". You declare the field as a normal Swift `Optional` and the wrapper handles the wire-format quirk transparently:
+For scalar fields where Odoo may return `false` to mean "unset". You declare the field as a normal Swift `Optional` and the wrapper handles the wire-format quirk transparently.
+
+> [!IMPORTANT]
+> `@OdxOptional` requires `var` (not `let`) — property wrappers can't wrap immutable stored properties. Use it inside `struct`s normally; the synthesized memberwise init still works.
 
 ```swift
 struct Product: Codable, Sendable {
