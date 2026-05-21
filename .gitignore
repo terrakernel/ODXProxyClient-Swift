@@ -16,5 +16,7 @@ xcuserdata/
 .vscode/
 .idea/
 
+SYSTEM_ARCHITECTURE.md
+
 # Local integration-test credentials (filled in per developer; do not commit)
 Tests/ODXProxyClientSwiftTests/TestCredentials.swift
