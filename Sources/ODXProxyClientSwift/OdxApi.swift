@@ -1,6 +1,5 @@
 import Foundation
 
-@MainActor
 public enum OdxApi {
     
     
