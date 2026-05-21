@@ -118,17 +118,17 @@ struct ContentView: View {
                 limit: 20,
                 context: context
             )
-            
-            // Define a search domain (e.g., only fetch companies)
-            // Use AnyEncodable for heterogeneous arrays
-            let domain: [AnyEncodable] = [
-                AnyEncodable(["is_company", "=", true])
-            ]
+
+            // Build a search domain (e.g., only fetch companies) as OdxParams.
+            // OdxParams.init(_:) accepts any nested JSON-compatible Swift value.
+            let params = OdxParams([
+                [["is_company", "=", true]]
+            ])
 
             // Make the API call using async/await
             let response: OdxServerResponse<[Partner]> = try await OdxApi.searchRead(
                 model: "res.partner",
-                params: domain,
+                params: params,
                 keyword: keyword
             )
 

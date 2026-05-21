@@ -276,18 +276,25 @@ public struct OdxServerResponse<T: Codable & Sendable>: Codable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
-            jsonrpc = try container.decode(String.self, forKey: .jsonrpc)
+        jsonrpc = try container.decode(String.self, forKey: .jsonrpc)
 
-            if let idInt = try? container.decode(Int.self, forKey: .id) {
-                id = String(idInt)
-            } else if let idStr = try? container.decode(String.self, forKey: .id) {
-                id = idStr
-            } else {
-                id = ""
-            }
+        if let idInt = try? container.decode(Int.self, forKey: .id) {
+            id = String(idInt)
+        } else if let idStr = try? container.decode(String.self, forKey: .id) {
+            id = idStr
+        } else {
+            id = ""
+        }
 
-            result = try? container.decode(T.self, forKey: .result)
-            error  = try? container.decode(OdxServerErrorResponse.self, forKey: .error)
+        // Per spec §6: result and error are mutually exclusive.
+        // Decode error first; only decode result when no error is present, so
+        // result-shape mismatches surface as errors instead of silent nils.
+        error = try container.decodeIfPresent(OdxServerErrorResponse.self, forKey: .error)
+        if error == nil {
+            result = try container.decodeIfPresent(T.self, forKey: .result)
+        } else {
+            result = nil
+        }
     }
     
     public init(jsonrpc: String, id: String, result: T?, error: OdxServerErrorResponse?) {
@@ -300,10 +307,10 @@ public struct OdxServerResponse<T: Codable & Sendable>: Codable, Sendable {
 }
 
 public struct OdxServerErrorResponse: Codable, Error, Sendable {
-    let code: Int
-    let message: String
-    let data: AnyCodable?
-    
+    public let code: Int
+    public let message: String
+    public let data: AnyCodable?
+
     public init(code: Int, message: String, data: AnyCodable?) {
         self.code = code
         self.message = message

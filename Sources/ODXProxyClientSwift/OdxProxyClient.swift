@@ -12,17 +12,24 @@ public final class OdxProxyClient: @unchecked Sendable {
 
     private let lock = NSLock()
     private var config: Config?
+    private var configurationError: OdxProxyError?
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     private init() {}
 
-    public func configure(with options: OdxProxyClientInfo, timeout: Int?) {
+    public func configure(with options: OdxProxyClientInfo, timeout: Int? = nil) {
         var gatewayUrlString = options.gatewayUrl ?? "https://gateway.odxproxy.io"
         if gatewayUrlString.hasSuffix("/") {
             gatewayUrlString = String(gatewayUrlString.dropLast())
         }
         guard let gatewayUrl = URL(string: gatewayUrlString) else {
+            lock.lock()
+            let previousSession = config?.session
+            config = nil
+            configurationError = .invalidURL
+            lock.unlock()
+            previousSession?.finishTasksAndInvalidate()
             return
         }
         let executeURL = gatewayUrl.appendingPathComponent("/api/odoo/execute")
@@ -43,6 +50,7 @@ public final class OdxProxyClient: @unchecked Sendable {
         lock.lock()
         let previousSession = config?.session
         config = newConfig
+        configurationError = nil
         lock.unlock()
 
         previousSession?.finishTasksAndInvalidate()
@@ -57,10 +65,9 @@ public final class OdxProxyClient: @unchecked Sendable {
     private func snapshotConfig() throws -> Config {
         lock.lock()
         defer { lock.unlock() }
-        guard let config = config else {
-            throw OdxProxyError.notConfigured
-        }
-        return config
+        if let config = config { return config }
+        if let err = configurationError { throw err }
+        throw OdxProxyError.notConfigured
     }
 
     internal func postRequest<T: Codable & Sendable>(body: OdxClientRequest) async throws -> OdxServerResponse<T> {
@@ -81,7 +88,12 @@ public final class OdxProxyClient: @unchecked Sendable {
             throw OdxProxyError.serverError(errorResponse?.error ?? OdxServerErrorResponse(code: httpResponse.statusCode, message: "Unknown server error", data: nil))
         }
 
-        let decodedResponse = try decoder.decode(OdxServerResponse<T>.self, from: data)
+        let decodedResponse: OdxServerResponse<T>
+        do {
+            decodedResponse = try decoder.decode(OdxServerResponse<T>.self, from: data)
+        } catch let error as DecodingError {
+            throw OdxProxyError.decodingError(error)
+        }
         if let error = decodedResponse.error {
             throw OdxProxyError.serverError(error)
         }

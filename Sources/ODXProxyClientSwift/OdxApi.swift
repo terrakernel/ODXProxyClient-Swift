@@ -541,12 +541,20 @@ public enum OdxApi {
     ///   expected inputs.
     ///
     public static func callMethod<T: Codable & Sendable>(model: String, functionName: String, params: OdxParams, keyword: OdxClientKeywordRequest, id: String? = nil) async throws -> OdxServerResponse<T> {
+        guard !functionName.isEmpty else {
+            throw OdxProxyError.serverError(OdxServerErrorResponse(
+                code: -32002,
+                message: "fn_name is required for call_method",
+                data: nil
+            ))
+        }
+
         var kCopy = keyword
         kCopy.order = nil
         kCopy.limit = nil
         kCopy.offset = nil
         kCopy.fields = nil
-        
+
         guard let odooInstance = client().getOdooInstance() else {
             throw OdxProxyError.notConfigured
         }
