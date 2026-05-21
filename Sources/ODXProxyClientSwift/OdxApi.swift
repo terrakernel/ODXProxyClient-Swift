@@ -37,7 +37,7 @@ public enum OdxApi {
     ///
     /// - Example:
     /// ```swift
-    /// let ids = try await OdxClient.search(
+    /// let ids = try await OdxApi.search(
     ///     model: "res.partner",
     ///     params: OdxParams([["is_company", "=", true]]),
     ///     keyword: OdxClientKeywordRequest()
@@ -103,7 +103,7 @@ public enum OdxApi {
     ///     let name: String
     /// }
     ///
-    /// let partners = try await OdxClient.searchRead(
+    /// let partners = try await OdxApi.searchRead(
     ///     model: "res.partner",
     ///     params: OdxParams([["is_company", "=", true]]),
     ///     keyword: OdxClientKeywordRequest(limit: 50)
@@ -195,7 +195,7 @@ public enum OdxApi {
     ///     let relation: String?
     /// }
     ///
-    /// let fields = try await OdxClient.fieldsGet(
+    /// let fields = try await OdxApi.fieldsGet(
     ///     model: "res.partner",
     ///     keyword: OdxClientKeywordRequest()
     /// )
@@ -300,7 +300,7 @@ public enum OdxApi {
     ///     "email": "test@example.com"
     /// ])
     ///
-    /// let result = try await OdxClient.create(
+    /// let result = try await OdxApi.create(
     ///     model: "res.partner",
     ///     params: params,
     ///     keyword: OdxClientKeywordRequest()
@@ -370,7 +370,7 @@ public enum OdxApi {
     /// ```swift
     /// let params = OdxParams([10, 11, 12])  // Delete these product IDs
     ///
-    /// let response = try await OdxClient.remove(
+    /// let response = try await OdxApi.remove(
     ///     model: "product.product",
     ///     params: params,
     ///     keyword: OdxClientKeywordRequest()

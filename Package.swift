@@ -5,9 +5,9 @@ import PackageDescription
 let package = Package(
     name: "ODXProxyClientSwift",
     platforms: [
-        .macOS(.v12), 
-        .iOS(.v15), 
-        .tvOS(.v15), 
+        .macOS(.v12),
+        .iOS(.v15),
+        .tvOS(.v15),
         .watchOS(.v8),
         .visionOS(.v1),
         .macCatalyst(.v15)
@@ -30,7 +30,8 @@ let package = Package(
             dependencies: [
                 "ODXProxyClientSwift",
                 .product(name: "Testing", package: "swift-testing")
-            ]
+            ],
+            exclude: ["TestCredentials.swift.example"]
         )
     ]
 )

@@ -107,39 +107,43 @@ public struct AnyCodable: Codable, @unchecked Sendable {
 // MARK: - ULID
 public struct ULID: Sendable {
     public let ulidString: String
-    
+
     public init() {
         self.ulidString = ULID.generate()
     }
-    
+
+    private static let hexChars: [UInt8] = Array("0123456789ABCDEF".utf8)
+
     private static func generate() -> String {
-        let time = String(format:"%010X", Int(Date().timeIntervalSince1970 * 1000))
-        var random = ""
-        for _ in 0..<16 {
-            random += String(format: "%X", Int.random(in: 0...15))
+        let timeMillis = UInt64(Date().timeIntervalSince1970 * 1000)
+
+        var bytes = [UInt8](repeating: 0, count: 26)
+        // 10 hex chars of timestamp (low 40 bits, big-endian)
+        for i in 0..<10 {
+            let shift = (9 - i) * 4
+            bytes[i] = hexChars[Int((timeMillis >> shift) & 0xF)]
         }
-        return time + random
+        // 16 random hex chars
+        for i in 10..<26 {
+            bytes[i] = hexChars[Int.random(in: 0..<16)]
+        }
+        return String(decoding: bytes, as: UTF8.self)
     }
 }
 
 public extension String {
-    
-    /// A helper function that returns `false` if the string is empty;
-    /// otherwise it returns the string unchanged.
-    ///
-    /// Useful when sending data to Odoo fields where `false` represents an
-    /// optional or unset value.
-    public var DefaultOrFalse: Any {
+
+    /// Returns `false` when the string is empty; otherwise the string itself.
+    /// Useful for Odoo fields where `false` represents an unset value.
+    var DefaultOrFalse: Any {
         self.isEmpty ? false: self
     }
 }
 
 public extension Array where Element: Codable {
-    /// Returns `false` when the array is empty,
-    /// or the array itself when it contains values.
-    ///
+    /// Returns `false` when the array is empty; otherwise the array itself.
     /// Useful for preparing Many2many or One2many fields in Odoo RPC payloads.
-    public var DefaultOrFalse: Any {
+    var DefaultOrFalse: Any {
         self.isEmpty ? false: self
     }
 }
