@@ -16,7 +16,7 @@ swift test
 swift test --filter ODXProxyClientIntegrationTests/searchRead_returnsRecords
 ```
 
-Tests use `swift-testing` (not XCTest). The `swift-testing` package dependency in `Package.swift` looks redundant on Swift 6.2 (the toolchain bundles `Testing`), but removing it currently breaks the build with `missing required module '_TestingInternals'`. Leave it. Deprecation warnings about `@Test`/`@Suite` are cosmetic.
+Tests use `swift-testing` (not XCTest). Swift 6.2 bundles `Testing`, so `Package.swift` declares no external `swift-testing` dependency — just `import Testing` directly. If a stale `.build` or `Package.resolved` is around from earlier setups, a clean rebuild may be needed (`rm -rf .build .swiftpm/xcode Package.resolved && swift package reset`).
 
 ## Integration tests + credentials
 

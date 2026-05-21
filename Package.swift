@@ -18,9 +18,6 @@ let package = Package(
             targets: ["ODXProxyClientSwift"]
         )
     ],
-    dependencies: [
-        .package(url: "https://github.com/apple/swift-testing.git", from: "0.7.0")
-    ],
     targets: [
         .target(
             name: "ODXProxyClientSwift"
@@ -28,8 +25,7 @@ let package = Package(
         .testTarget(
             name: "ODXProxyClientSwiftTests",
             dependencies: [
-                "ODXProxyClientSwift",
-                .product(name: "Testing", package: "swift-testing")
+                "ODXProxyClientSwift"
             ],
             exclude: ["TestCredentials.swift.example"]
         )
