@@ -487,68 +487,85 @@ public struct OdxMany2One: Codable, Sendable {
 
 
 
-/// A wrapper type used to decode Odoo-style optional values where `false`, `null`,
-/// or a missing field all represent the absence of a value.
+/// Property wrapper for Odoo-style optional fields, which encode "unset" as
+/// the literal Bool `false` instead of `null`.
 ///
-/// `OptionalOdxValue` is designed specifically for Odoo JSON responses, where optional
-/// fields are often encoded unpredictably:
-/// - `null` → means no value
-/// - `false` → *also* means no value (common for unset Many2One or empty fields)
-/// - A real value of type `T`
-///
-/// This type normalizes all those cases into a single `value: T?`, making decoding logic
-/// much cleaner and preventing type mismatches during JSON parsing.
-///
-/// ## Example JSON Inputs
-///
-/// | JSON Value | Meaning | Decoded Result |
-/// |------------|---------|----------------|
-/// | `null`     | No value | `value == nil` |
-/// | `false`    | No value | `value == nil` |
-/// | `"ABC"`    | Valid `T` | `.some("ABC")` |
-/// | `123`      | Valid `T` | `.some(123)` |
-///
-/// ## Example Usage
+/// Usage at a call site looks like a normal Swift `Optional`:
 /// ```swift
 /// struct Product: Codable, Sendable {
-///     let barcode: OptionalOdxValue<String>
+///     let id: Int
+///     @OdxOptional var barcode: String?
 /// }
 ///
-/// let json = #"{"barcode": false}"#.data(using: .utf8)!
 /// let p = try JSONDecoder().decode(Product.self, from: json)
-/// print(p.barcode.value) // nil
+/// print(p.barcode ?? "no barcode")   // String? — no `.value` indirection
 /// ```
 ///
-/// - Note:
-/// This type is `Sendable` so it is safe to use across Swift concurrency
-/// boundaries (e.g., decoding in background threads).
+/// ## Decoding rules
 ///
-/// - Warning:
-/// If the JSON contains an invalid type for `T` that cannot be decoded, the value
-/// will silently become `nil` (`decode(T.self)` is attempted with `try?`).
+/// | JSON value | Decoded result      |
+/// |------------|---------------------|
+/// | `null`     | `nil`               |
+/// | `false`    | `nil` (Odoo convention) |
+/// | absent key | `nil` (safety net)  |
+/// | a real `T` | `.some(value)`      |
+/// | any other  | throws `DecodingError` |
 ///
-/// - Type Parameter:
-///   - `T`: The underlying value type, which must conform to `Codable` and `Sendable`.
-public struct OptionalOdxValue<T: Codable & Sendable>: Codable, Sendable {
-    public let value: T?
-    
+/// ## Encoding rules
+///
+/// - `nil` encodes as JSON `false` (Odoo convention — symmetric with decode).
+/// - `.some(value)` encodes as `value`.
+///
+/// ## Caveat: `@OdxOptional var x: Bool?`
+///
+/// For `Wrapped == Bool`, the wire `false` always decodes to `nil` — Odoo's
+/// convention makes it impossible to distinguish "actually false" from "unset"
+/// from the JSON alone. This is a wire-format limitation, not a library bug.
+@propertyWrapper
+public struct OdxOptional<Wrapped: Codable & Sendable>: Codable, Sendable {
+    public var wrappedValue: Wrapped?
+
+    public init(wrappedValue: Wrapped?) {
+        self.wrappedValue = wrappedValue
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        
+
         if container.decodeNil() {
-            self.value = nil
+            self.wrappedValue = nil
             return
         }
-        
-        if let boolVal = try? container.decode(Bool.self) {
-            if boolVal == false {
-                self.value = nil
-                return
-            }
+
+        // Odoo's "unset" convention: literal Bool false means no value.
+        // Note: when Wrapped is Bool itself, we cannot distinguish "false"
+        // from "unset" — see the type's caveat doc.
+        if let bool = try? container.decode(Bool.self), bool == false {
+            self.wrappedValue = nil
+            return
         }
-        
-        self.value = try? container.decode(T.self)
+
+        self.wrappedValue = try container.decode(Wrapped.self)
     }
-    
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        if let value = wrappedValue {
+            try container.encode(value)
+        } else {
+            try container.encode(false)
+        }
+    }
+}
+
+/// Makes `@OdxOptional` decode missing JSON keys as `nil` instead of throwing,
+/// mirroring the behavior callers expect from `Optional` properties.
+extension KeyedDecodingContainer {
+    public func decode<Wrapped>(
+        _ type: OdxOptional<Wrapped>.Type,
+        forKey key: Key
+    ) throws -> OdxOptional<Wrapped> {
+        try decodeIfPresent(type, forKey: key) ?? OdxOptional(wrappedValue: nil)
+    }
 }
 

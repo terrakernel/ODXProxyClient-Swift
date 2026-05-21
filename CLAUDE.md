@@ -70,7 +70,7 @@ Every data-API call sends `{ id, action, model_id, keyword, fn_name?, params, od
 - `OdxServerResponse.init(from:)` decodes `id` as either `Int` or `String` (Odoo's own JSON-RPC id is sometimes int; the proxy round-trips it). Do not break this dual-path decode.
 - `result` and `error` are mutually exclusive per spec §6. The custom decode reads `error` first; only attempts `result` decode when no error is present. This means a result that fails to decode against `T` surfaces a `DecodingError` (wrapped as `OdxProxyError.decodingError`) instead of silently producing `result == nil`.
 - `OdxParams` stores numbers as `Double`. Odoo IDs above 2^53 would lose precision — academic, but be aware if you ever swap to `Int`.
-- `OdxMany2One` and `OptionalOdxValue<T>` exist because Odoo returns `false` (not `null`) for unset relational/optional fields. Don't replace them with vanilla `Optional<T>`.
+- `OdxMany2One` (struct) and `@OdxOptional` (property wrapper) exist because Odoo returns `false` (not `null`) for unset relational/optional fields. `@OdxOptional var foo: T?` decodes `false` / `null` / absent key as `nil` and encodes `nil` back as `false`. Don't replace either with vanilla `Optional<T>` — synthesized Codable will throw on `false`-where-T-was-expected.
 
 ### Error handling
 

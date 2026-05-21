@@ -493,21 +493,46 @@ let category = product.categ_id
 print(category.id ?? -1, category.name ?? "")
 ```
 
-### `OptionalOdxValue<T>`
+### `@OdxOptional` property wrapper
 
-For scalar fields where Odoo may return `false` to mean "unset":
+For scalar fields where Odoo may return `false` to mean "unset". You declare the field as a normal Swift `Optional` and the wrapper handles the wire-format quirk transparently:
 
 ```swift
 struct Product: Codable, Sendable {
     let id: Int
     let name: String
-    let barcode: OptionalOdxValue<String>   // "ABC123", false, or null
+
+    @OdxOptional var barcode: String?        // "ABC123", false, null, or missing
+    @OdxOptional var notes: String?
 }
 
-if let barcode = product.barcode.value {
+if let barcode = product.barcode {           // String? — read it like a normal Optional
     print(barcode)
 }
 ```
+
+**Decode behavior** (all four cases produce `nil`):
+
+| Wire JSON           | `product.barcode` |
+|---------------------|-------------------|
+| `"ABC123"`          | `.some("ABC123")` |
+| `false`             | `nil` (Odoo convention) |
+| `null`              | `nil` |
+| key absent          | `nil` |
+| something else (`42`, `[]`) | throws `DecodingError` |
+
+**Encode behavior** — `nil` round-trips back as JSON `false`, matching what Odoo expects when you're writing the field back:
+
+```swift
+let p = Product(id: 1, name: "Widget", barcode: nil, notes: "blue")
+let data = try JSONEncoder().encode(p)
+// → {"id":1,"name":"Widget","barcode":false,"notes":"blue"}
+```
+
+**Caveat — `Bool?`:** when `Wrapped == Bool`, the wire literal `false` always decodes as `nil` because Odoo uses the same value for both "actually false" and "unset". This is a wire-format limitation, not a library bug. If you need to distinguish, use a separate "is set" field or `Int?` with 0/1.
+
+> Migration from earlier versions: `OptionalOdxValue<T>` has been replaced by `@OdxOptional`. The change is mechanical:
+> `let foo: OptionalOdxValue<T>` → `@OdxOptional var foo: T?`, and drop `.value` at every read site.
 
 ---
 
