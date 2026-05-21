@@ -64,7 +64,7 @@ public enum OdxApi {
             odooInstance: odooInstance
         )
 
-        return try await client().postRequest(body: body)
+        return try await client().postExecuteRPC(body: body)
     }
     
     /// Executes an Odoo `search_read` RPC call and returns a typed list of records.
@@ -125,7 +125,7 @@ public enum OdxApi {
             odooInstance: odooInstance
         )
 
-        return try await client().postRequest(body: body)
+        return try await client().postExecuteRPC(body: body)
     }
 
     
@@ -149,7 +149,7 @@ public enum OdxApi {
             odooInstance: odooInstance
         )
 
-        return try await client().postRequest(body: body)
+        return try await client().postExecuteRPC(body: body)
     }
 
     /// Retrieves the full field metadata definition of an Odoo model using the
@@ -222,7 +222,7 @@ public enum OdxApi {
             odooInstance: odooInstance
         )
         
-        return try await client().postRequest(body: body)
+        return try await client().postExecuteRPC(body: body)
     }
 
     /// Counts the number of records matching the given search domain.
@@ -263,7 +263,7 @@ public enum OdxApi {
             odooInstance: odooInstance
         )
         
-        return try await client().postRequest(body: body)
+        return try await client().postExecuteRPC(body: body)
     }
 
     /// Creates a new record on an Odoo model using the `create` RPC action.
@@ -333,7 +333,7 @@ public enum OdxApi {
             odooInstance: odooInstance
         )
         
-        return try await client().postRequest(body: body)
+        return try await client().postExecuteRPC(body: body)
     }
 
     
@@ -403,7 +403,7 @@ public enum OdxApi {
             odooInstance: odooInstance
         )
 
-        return try await client().postRequest(body: body)
+        return try await client().postExecuteRPC(body: body)
     }
     
     /// Updates one or more records in an Odoo model using the `write` RPC action.
@@ -480,7 +480,7 @@ public enum OdxApi {
             odooInstance: odooInstance
         )
         
-        return try await client().postRequest(body: body)
+        return try await client().postExecuteRPC(body: body)
     }
 
     /// Aliases to Write
@@ -542,7 +542,7 @@ public enum OdxApi {
     ///
     public static func callMethod<T: Codable & Sendable>(model: String, functionName: String, params: OdxParams, keyword: OdxClientKeywordRequest, id: String? = nil) async throws -> OdxServerResponse<T> {
         guard !functionName.isEmpty else {
-            throw OdxProxyError.serverError(OdxServerErrorResponse(
+            throw OdxProxyError.missingFunctionName(OdxServerErrorResponse(
                 code: -32002,
                 message: "fn_name is required for call_method",
                 data: nil
@@ -569,6 +569,34 @@ public enum OdxApi {
             odooInstance: odooInstance
         )
         
-        return try await client().postRequest(body: body)
+        return try await client().postExecuteRPC(body: body)
+    }
+
+    /// Queries an Odoo server's public `version_info` via the proxy
+    /// (`POST /api/odoo/version`). No Odoo credentials are needed — the
+    /// proxy hits `/web/webclient/version_info`, which is public.
+    ///
+    /// - Parameters:
+    ///   - url: Base URL of the Odoo server to query. If `nil`, uses the URL
+    ///     from the configured `OdxInstanceInfo`.
+    ///   - id: Optional request ID. A ULID is generated if omitted.
+    /// - Returns: `OdxServerResponse<T>` where `T` is whatever shape you want to
+    ///   decode the Odoo version_info object into.
+    public static func version<T: Codable & Sendable>(
+        url: String? = nil,
+        id: String? = nil
+    ) async throws -> OdxServerResponse<T> {
+        let targetUrl: String
+        if let url = url {
+            targetUrl = url
+        } else {
+            guard let instance = client().getOdooInstance() else {
+                throw OdxProxyError.notConfigured
+            }
+            targetUrl = instance.url
+        }
+
+        let body = OdxVersionRequest(id: id ?? ULID().ulidString, url: targetUrl)
+        return try await client().postVersionRequest(body: body)
     }
 }

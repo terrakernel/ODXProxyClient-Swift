@@ -318,6 +318,50 @@ public struct OdxServerErrorResponse: Codable, Error, Sendable {
     }
 }
 
+// MARK: - Ops endpoints (SYSTEM_ARCHITECTURE.md §4.2–4.4)
+
+/// Body shape for `POST /api/odoo/version`. The proxy queries the Odoo
+/// server's public `/web/webclient/version_info` — no Odoo credentials needed.
+public struct OdxVersionRequest: Encodable, Sendable {
+    public let id: String
+    public let url: String
+
+    public init(id: String, url: String) {
+        self.id = id
+        self.url = url
+    }
+}
+
+/// Response shape for `GET /_/about` (wrapped in `OdxServerResponse<OdxAboutInfo>`).
+public struct OdxAboutInfo: Codable, Sendable {
+    public let build: String
+    public let version: String
+
+    public init(build: String, version: String) {
+        self.build = build
+        self.version = version
+    }
+}
+
+/// Response shape for `GET /_/license` (flat object, NOT a JSON-RPC envelope).
+public struct OdxLicenseInfo: Codable, Sendable {
+    public let licensee: String
+    public let validUntil: String
+    public let isValid: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case licensee
+        case validUntil = "valid_until"
+        case isValid = "is_valid"
+    }
+
+    public init(licensee: String, validUntil: String, isValid: Bool) {
+        self.licensee = licensee
+        self.validUntil = validUntil
+        self.isValid = isValid
+    }
+}
+
 //MARK: - Odoo Field Helper
 
 /// A representation of an Odoo Many2One relational field, which is commonly
