@@ -73,6 +73,8 @@ public final class OdxProxyClient: @unchecked Sendable {
     internal func postRequest<T: Codable & Sendable>(body: OdxClientRequest) async throws -> OdxServerResponse<T> {
         let snapshot = try snapshotConfig()
 
+        try Task.checkCancellation()
+
         var request = URLRequest(url: snapshot.executeURL)
         request.httpMethod = "POST"
         request.httpBody = try encoder.encode(body)
@@ -87,6 +89,8 @@ public final class OdxProxyClient: @unchecked Sendable {
             let errorResponse = try? decoder.decode(OdxServerResponse<T>.self, from: data)
             throw OdxProxyError.serverError(errorResponse?.error ?? OdxServerErrorResponse(code: httpResponse.statusCode, message: "Unknown server error", data: nil))
         }
+
+        try Task.checkCancellation()
 
         let decodedResponse: OdxServerResponse<T>
         do {
