@@ -38,7 +38,11 @@ public enum OdxProxyError: Error, LocalizedError {
         case -32005: return .proxyInternal(response)
         case -32006: return .json2Unavailable(response)
         case -32007: return .invalidRequest(response)
-        case 0:      return .licenseInvalid(response)
+        // The proxy's license error is code 0 on HTTP 403. Odoo 19+ also sends
+        // code 0 for every /jsonrpc error, forwarded on HTTP 200: those are Odoo
+        // logic errors and fall through to `.odooLogic` below.
+        case 0 where httpStatus == nil || httpStatus == 403:
+                     return .licenseInvalid(response)
         default:
             if httpStatus == 200 {
                 return .odooLogic(response)

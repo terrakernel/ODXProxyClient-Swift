@@ -899,7 +899,7 @@ The client throws `OdxProxyError`. The major cases:
 | `.upstreamTimeout(_)` | Proxy → Odoo upstream timed out (proxy code `-32003`). |
 | `.upstreamConnect(_)` | Proxy couldn't connect to Odoo (proxy code `-32004`). |
 | `.proxyInternal(_)` | Internal proxy error (proxy code `-32005`). |
-| `.licenseInvalid(_)` | Proxy license expired/invalid (proxy code `0`, HTTP 403). |
+| `.licenseInvalid(_)` | Proxy license expired/invalid (proxy code `0`, HTTP 403). Odoo 19+ also uses code `0` for its own `/jsonrpc` errors; those arrive on HTTP 200 as `.odooLogic`. |
 | `.json2Unavailable(_)` | **v2 only.** No JSON-2 on that Odoo, or DB not selectable (proxy code `-32006`). See §3a. |
 | `.invalidRequest(_)` | **v2 only.** Invalid model/method name or header-unsafe db/key (proxy code `-32007`). See §3a. |
 | `.odooLogic(_)` | Odoo-side business error (200 OK + error envelope, e.g. validation, access denied). |

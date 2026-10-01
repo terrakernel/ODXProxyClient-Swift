@@ -160,7 +160,7 @@ struct OdxApiV2WireTests {
 @Suite("OdxApiV2 errors and version")
 struct OdxApiV2ErrorTests {
 
-    private func error(_ code: Int, http: Int, data: AnyCodable? = nil) -> OdxProxyError {
+    private func error(_ code: Int, http: Int?, data: AnyCodable? = nil) -> OdxProxyError {
         OdxProxyError.from(OdxServerErrorResponse(code: code, message: "boom", data: data), httpStatus: http)
     }
 
@@ -191,6 +191,19 @@ struct OdxApiV2ErrorTests {
     @Test("v1-style Odoo codes (0 / 200) have no odooStatus")
     func v1Codes() {
         #expect(error(200, http: 200).odooStatus == nil)
+    }
+
+    @Test("Code 0 is .licenseInvalid only on HTTP 403; Odoo 19+ /jsonrpc errors (0 on 200) are .odooLogic")
+    func codeZero() {
+        guard case .licenseInvalid = error(0, http: 403) else {
+            Issue.record("expected .licenseInvalid on 403"); return
+        }
+        guard case .odooLogic = error(0, http: 200) else {
+            Issue.record("expected .odooLogic on 200"); return
+        }
+        guard case .licenseInvalid = error(0, http: nil) else {
+            Issue.record("expected .licenseInvalid without a status (backwards compatible)"); return
+        }
     }
 
     @Test("A non-2xx 422 (proxy rejected the body) is .serverError, not .odooLogic")
