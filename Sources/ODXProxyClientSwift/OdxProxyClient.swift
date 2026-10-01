@@ -10,7 +10,10 @@ public final class OdxProxyClient: @unchecked Sendable {
         let versionURL: URL
         let aboutURL: URL
         let licenseURL: URL
+        let v2ExecuteURL: URL
+        let v2VersionURL: URL
         let odooInstance: OdxInstanceInfo
+        let defaultContext: OdxContext?
     }
 
     private let lock = NSLock()
@@ -53,7 +56,10 @@ public final class OdxProxyClient: @unchecked Sendable {
             versionURL: gatewayUrl.appendingPathComponent("/api/odoo/version"),
             aboutURL:   gatewayUrl.appendingPathComponent("/_/about"),
             licenseURL: gatewayUrl.appendingPathComponent("/_/license"),
-            odooInstance: options.instance
+            v2ExecuteURL: gatewayUrl.appendingPathComponent("/v2/odoo/execute"),
+            v2VersionURL: gatewayUrl.appendingPathComponent("/v2/odoo/version"),
+            odooInstance: options.instance,
+            defaultContext: options.defaultContext
         )
 
         lock.lock()
@@ -69,6 +75,15 @@ public final class OdxProxyClient: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return config?.odooInstance
+    }
+
+    /// Instance and v2 default context from one snapshot, so a concurrent
+    /// `configure(...)` can't pair one configuration's instance with another's context.
+    internal func getV2Binding() -> (instance: OdxInstanceInfo, defaultContext: OdxContext?)? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let config else { return nil }
+        return (config.odooInstance, config.defaultContext)
     }
 
     private func snapshotConfig() throws -> Config {
@@ -169,6 +184,20 @@ public final class OdxProxyClient: @unchecked Sendable {
     ) async throws -> OdxServerResponse<T> {
         let snapshot = try snapshotConfig()
         return try await postEnvelope(snapshot: snapshot, url: snapshot.versionURL, body: body)
+    }
+
+    internal func postV2ExecuteRPC<T: Codable & Sendable>(
+        body: OdxV2Request
+    ) async throws -> OdxServerResponse<T> {
+        let snapshot = try snapshotConfig()
+        return try await postEnvelope(snapshot: snapshot, url: snapshot.v2ExecuteURL, body: body)
+    }
+
+    internal func postV2VersionRequest<T: Codable & Sendable>(
+        body: OdxVersionRequest
+    ) async throws -> OdxServerResponse<T> {
+        let snapshot = try snapshotConfig()
+        return try await postEnvelope(snapshot: snapshot, url: snapshot.v2VersionURL, body: body)
     }
 
     internal func getAboutInfo() async throws -> OdxServerResponse<OdxAboutInfo> {

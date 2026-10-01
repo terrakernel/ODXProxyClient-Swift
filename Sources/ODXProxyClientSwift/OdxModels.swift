@@ -25,15 +25,20 @@ public struct OdxProxyClientInfo: Codable, Sendable {
     let instance: OdxInstanceInfo
     let odxApiKey: String
     let gatewayUrl: String?
+    /// v2 only (`OdxApiV2`): context merged into every v2 call; a call's own
+    /// `context` keys win. Odoo applies no company selection unless
+    /// `allowed_company_ids` is sent. Does not affect `OdxApi` (v1) calls.
+    let defaultContext: OdxContext?
     
     enum CodingKeys: String, CodingKey {
-        case instance, odxApiKey, gatewayUrl
+        case instance, odxApiKey, gatewayUrl, defaultContext
     }
     
-    public init(instance: OdxInstanceInfo, odxApiKey: String, gatewayUrl: String?) {
+    public init(instance: OdxInstanceInfo, odxApiKey: String, gatewayUrl: String?, defaultContext: OdxContext? = nil) {
         self.instance = instance
         self.odxApiKey = odxApiKey
         self.gatewayUrl = gatewayUrl
+        self.defaultContext = defaultContext
     }
 
 }
@@ -569,3 +574,124 @@ extension KeyedDecodingContainer {
     }
 }
 
+
+// MARK: - v2 (Odoo JSON-2, ODXProxy 0.9.0+)
+
+/// Odoo context for `OdxApiV2` calls, sent as `kwargs.context`.
+///
+/// Common keys have labelled parameters; anything else goes in `extra`, keyed by
+/// Odoo's own context key (never case-converted).
+///
+/// ```swift
+/// let ctx = OdxContext(lang: "en_US", tz: "Asia/Jakarta", allowedCompanyIds: [1])
+/// ```
+public struct OdxContext: Codable, Sendable {
+    public var values: [String: OdxParams]
+
+    public init(lang: String? = nil, tz: String? = nil, allowedCompanyIds: [Int]? = nil, extra: [String: OdxParams] = [:]) {
+        var values = extra
+        if let lang { values["lang"] = .string(lang) }
+        if let tz { values["tz"] = .string(tz) }
+        if let allowedCompanyIds { values["allowed_company_ids"] = .array(allowedCompanyIds.map { .number(Double($0)) }) }
+        self.values = values
+    }
+
+    public init(_ values: [String: OdxParams]) {
+        self.values = values
+    }
+
+    /// Returns `self` overlaid with `other`; keys from `other` win.
+    public func merging(_ other: OdxContext?) -> OdxContext {
+        guard let other else { return self }
+        return OdxContext(values.merging(other.values) { _, new in new })
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(values)
+    }
+
+    public init(from decoder: Decoder) throws {
+        values = try decoder.singleValueContainer().decode([String: OdxParams].self)
+    }
+}
+
+/// Result of `OdxApiV2.version`: Odoo's `GET /json/version`, which has a
+/// different shape from the v1 `OdxApi.version` result.
+public struct OdxV2VersionInfo: Codable, Sendable {
+    /// e.g. `[20, 0, 0, "final", 0, "e"]`
+    public let versionInfo: [OdxParams]
+    /// e.g. `"20.0+e"`
+    public let version: String
+
+    enum CodingKeys: String, CodingKey {
+        case versionInfo = "version_info"
+        case version
+    }
+
+    public init(versionInfo: [OdxParams], version: String) {
+        self.versionInfo = versionInfo
+        self.version = version
+    }
+
+    /// Odoo's major version (`versionInfo[0]`), e.g. `20`.
+    public var major: Int? {
+        if case .number(let n)? = versionInfo.first { return Int(n) }
+        return nil
+    }
+}
+
+/// `odoo_instance` for v2. There is no `user_id`, because JSON-2 derives the user
+/// from the API key.
+struct OdxV2Instance: Encodable, Sendable {
+    let url: String
+    let db: String
+    let apiKey: String
+
+    enum CodingKeys: String, CodingKey {
+        case url, db
+        case apiKey = "api_key"
+    }
+}
+
+/// Named arguments for a JSON-2 call, encoded as one JSON object. Keys are Odoo's
+/// Python parameter names verbatim (`domain`, `fields`, `vals_list`, `ids`, ...).
+/// `set` drops `nil`, so an argument the caller didn't pass is omitted and Odoo's
+/// own default applies.
+struct OdxV2Kwargs: Encodable, Sendable {
+    private(set) var entries: [String: any Encodable & Sendable] = [:]
+
+    mutating func set(_ key: String, _ value: (any Encodable & Sendable)?) {
+        if let value { entries[key] = value }
+    }
+
+    private struct Key: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+        init(_ string: String) { stringValue = string }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: Key.self)
+        for (key, value) in entries {
+            try container.encode(value, forKey: Key(key))
+        }
+    }
+}
+
+/// Body of `POST /v2/odoo/execute` (SYSTEM_ARCHITECTURE §4.6).
+struct OdxV2Request: Encodable, Sendable {
+    let id: String
+    let modelId: String
+    let method: String
+    let kwargs: OdxV2Kwargs
+    let odooInstance: OdxV2Instance
+
+    enum CodingKeys: String, CodingKey {
+        case id, method, kwargs
+        case modelId = "model_id"
+        case odooInstance = "odoo_instance"
+    }
+}

@@ -9,7 +9,7 @@
 //  Swift `URL` implementation ("up to 4x faster URL parsing"). The public API
 //  is unchanged, but the new parser is stricter/more RFC-3986-conformant, so
 //  edge cases in `URL(string:)` and `URL.appendingPathComponent(_:)` *could*
-//  shift. `OdxProxyClient.configure(with:)` builds its four endpoint URLs with
+//  shift. `OdxProxyClient.configure(with:)` builds its six endpoint URLs with
 //  exactly those two operations (see OdxProxyClient.swift), passing path
 //  components with a LEADING SLASH — the ambiguous case most likely to move.
 //
@@ -35,6 +35,8 @@ private struct Endpoints: Equatable {
     let version: String
     let about: String
     let license: String
+    let v2Execute: String
+    let v2Version: String
 }
 
 /// Mirror of `OdxProxyClient.configure(with:)`'s URL-building steps.
@@ -49,20 +51,24 @@ private func buildEndpoints(gateway raw: String) -> Endpoints? {
         execute: gatewayUrl.appendingPathComponent("/api/odoo/execute").absoluteString,
         version: gatewayUrl.appendingPathComponent("/api/odoo/version").absoluteString,
         about:   gatewayUrl.appendingPathComponent("/_/about").absoluteString,
-        license: gatewayUrl.appendingPathComponent("/_/license").absoluteString
+        license: gatewayUrl.appendingPathComponent("/_/license").absoluteString,
+        v2Execute: gatewayUrl.appendingPathComponent("/v2/odoo/execute").absoluteString,
+        v2Version: gatewayUrl.appendingPathComponent("/v2/odoo/version").absoluteString
     )
 }
 
 @Suite("Endpoint URL construction baseline")
 struct EndpointURLBaselineTests {
 
-    @Test("Default gateway resolves to the four documented endpoints")
+    @Test("Default gateway resolves to the six documented endpoints")
     func defaultGateway_baseline() throws {
         let e = try #require(buildEndpoints(gateway: "https://gateway.odxproxy.io"))
         #expect(e.execute == "https://gateway.odxproxy.io/api/odoo/execute")
         #expect(e.version == "https://gateway.odxproxy.io/api/odoo/version")
         #expect(e.about   == "https://gateway.odxproxy.io/_/about")
         #expect(e.license == "https://gateway.odxproxy.io/_/license")
+        #expect(e.v2Execute == "https://gateway.odxproxy.io/v2/odoo/execute")
+        #expect(e.v2Version == "https://gateway.odxproxy.io/v2/odoo/version")
     }
 
     @Test("Trailing slash on the gateway is stripped, not doubled")
@@ -77,7 +83,7 @@ struct EndpointURLBaselineTests {
     @Test("Leading slash in the appended path component does not produce a double slash")
     func leadingSlashPathComponent_noDoubleSlash() throws {
         let e = try #require(buildEndpoints(gateway: "https://gateway.odxproxy.io"))
-        for url in [e.execute, e.version, e.about, e.license] {
+        for url in [e.execute, e.version, e.about, e.license, e.v2Execute, e.v2Version] {
             // Only the scheme separator "://" may contain a double slash.
             let afterScheme = url.replacingOccurrences(of: "https://", with: "")
             #expect(!afterScheme.contains("//"), "unexpected double slash in \(url)")
@@ -91,5 +97,7 @@ struct EndpointURLBaselineTests {
         #expect(e.version == "https://example.com/proxy/api/odoo/version")
         #expect(e.about   == "https://example.com/proxy/_/about")
         #expect(e.license == "https://example.com/proxy/_/license")
+        #expect(e.v2Execute == "https://example.com/proxy/v2/odoo/execute")
+        #expect(e.v2Version == "https://example.com/proxy/v2/odoo/version")
     }
 }

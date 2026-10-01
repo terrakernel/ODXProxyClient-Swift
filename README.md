@@ -16,6 +16,7 @@ The wire protocol is documented in [`SYSTEM_ARCHITECTURE.md`](SYSTEM_ARCHITECTUR
 - **Typed errors.** Each JSON-RPC error code from the proxy maps to a distinct `OdxProxyError` case, so you can `catch` exactly the failure you care about.
 - **Cancellation-aware.** Honors `Task` cancellation between network and decode, so a SwiftUI view that disappears mid-request doesn't waste CPU finishing a decode nobody wants.
 - **Singleton client.** One configure call, one shared instance.
+- **v2 API for Odoo 19+ (`OdxApiV2`).** Reaches Odoo over its JSON-2 API through ODXProxy 0.9.0+, with named arguments and Odoo's HTTP status on errors. It's ready for Odoo 22, which removes the `/jsonrpc` endpoint that `OdxApi` (v1) relies on.
 
 ## Requirements
 
@@ -35,7 +36,7 @@ Or in your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/terrakernel/odxproxyswift.git", from: "1.0.0")
+    .package(url: "https://github.com/terrakernel/odxproxyswift.git", from: "1.1.0") // 1.1.0+ for OdxApiV2
 ],
 targets: [
     .target(name: "YourApp", dependencies: [
@@ -573,6 +574,159 @@ let response: OdxServerResponse<VersionInfo> = try await OdxApi.version()
 
 ---
 
+## 3a. v2 Data API reference (`OdxApiV2`) — Odoo 19+
+
+`OdxApiV2` talks to ODXProxy's `/v2/odoo/*` endpoints (**ODXProxy 0.9.0+**), which reach Odoo over its **JSON-2** API instead of `/jsonrpc`. It uses the same `OdxProxyClient.shared.configure(with:)` and the same instance as `OdxApi`. Nothing else needs setting up.
+
+**When to use which:**
+
+| Odoo version | `OdxApi` (v1) | `OdxApiV2` |
+|---|---|---|
+| 18 or older | ✅ only option | ❌ (`.json2Unavailable`) |
+| 19 – 21 | ✅ | ✅ |
+| 22 and newer | ❌ (`/jsonrpc` removed) | ✅ only option |
+
+`try await OdxApiV2.isSupported()` checks the configured instance once and caches the answer.
+
+**How v2 differs from v1:**
+
+- **Named arguments only.** Each method sends its arguments under Odoo's Python parameter names (`domain`, `fields`, `vals_list`, `ids`, …). There is no `params` and no `keyword`.
+- **The domain is the list itself:** `OdxParams([["is_company", "=", true]])`. v1's extra wrapping array is gone.
+- **Arguments left `nil` are omitted**, so Odoo's own defaults apply.
+- **`create` always returns `[Int]`**, even for one record. Use `createOne` for a single id.
+- **`values` can be any `Encodable`**: `OdxParams`, or your own `Codable` struct with Odoo field names as keys.
+- **The key must be an Odoo API key**, not a password. On Odoo 20+ its scope must be `rpc` (the default), and keys of non-admin users expire. `userId` is not sent, because Odoo derives the user from the key.
+- **Context:** set `defaultContext` once in `OdxProxyClientInfo`, and pass `context:` per call to override keys. It only affects v2 calls. Odoo applies no company selection unless `allowed_company_ids` is sent.
+- **Multi-database hosts:** the database is chosen by header and filtered by the server's `dbfilter`. If the host picks the database from its hostname, the instance `url` must be that database's own hostname. Otherwise calls throw `.json2Unavailable`.
+- **Binary fields on Odoo 20+** come back as `{ "content", "filename"?, "size" }` instead of a bare base64 string. This is an Odoo 20 change and applies to v1 too.
+
+### Configure (optional default context)
+
+```swift
+OdxProxyClient.shared.configure(
+    with: OdxProxyClientInfo(
+        instance: OdxInstanceInfo(url: "https://erp.example.com", userId: 2, db: "prod", apiKey: "<odoo api key>"),
+        odxApiKey: "<proxy key>",
+        gatewayUrl: nil,
+        defaultContext: OdxContext(lang: "en_US", tz: "Asia/Jakarta", allowedCompanyIds: [1])
+    )
+)
+```
+
+### Reading
+
+```swift
+struct Partner: Codable, Sendable {
+    let id: Int
+    let name: String
+}
+
+// search_read: domain, fields, offset, limit, order are all optional
+let partners: OdxServerResponse<[Partner]> = try await OdxApiV2.searchRead(
+    model: "res.partner",
+    domain: OdxParams([["is_company", "=", true]]),
+    fields: ["name"],
+    limit: 20,
+    order: "name asc"
+)
+
+// search -> [Int]
+let ids = try await OdxApiV2.search(model: "res.partner", domain: OdxParams([["customer_rank", ">", 0]]), limit: 10)
+
+// search_count -> Int
+let count = try await OdxApiV2.searchCount(model: "res.partner", domain: OdxParams([]))
+
+// read by ids -> [T]
+let some: OdxServerResponse<[Partner]> = try await OdxApiV2.read(model: "res.partner", ids: [3, 4], fields: ["name"])
+
+// fields_get -> T (keyed by field name)
+struct FieldInfo: Codable, Sendable { let type: String; let string: String }
+let schema: OdxServerResponse<[String: FieldInfo]> = try await OdxApiV2.fieldsGet(
+    model: "res.partner", attributes: ["type", "string"])
+```
+
+### Writing
+
+```swift
+struct NewPartner: Encodable, Sendable { let name: String; let email: String? }
+
+let newIds = try await OdxApiV2.create(model: "res.partner", values: [NewPartner(name: "Acme", email: nil),
+                                                                      NewPartner(name: "Globex", email: nil)])  // [41, 42]
+let one = try await OdxApiV2.createOne(model: "res.partner", values: OdxParams(["name": "Initech"]))         // 43
+
+_ = try await OdxApiV2.write(model: "res.partner", ids: [41], values: OdxParams(["comment": "via v2"]))       // true
+_ = try await OdxApiV2.remove(model: "res.partner", ids: [41, 42])                                           // true
+```
+
+### Calling any method
+
+```swift
+// Record method: pass ids
+let posted: OdxServerResponse<Bool> = try await OdxApiV2.callMethod(model: "account.move", method: "action_post", ids: [7])
+
+// @api.model method: no ids; every argument named
+let hits: OdxServerResponse<[OdxParams]> = try await OdxApiV2.callMethod(
+    model: "res.partner",
+    method: "name_search",
+    kwargs: ["name": .string("Acm"), "limit": .number(5)]
+)
+```
+
+There are no positional arguments in v2: every argument goes in `kwargs` under its Python parameter name. Sending `ids` to an `@api.model` method, or using an unknown name, is an Odoo `422`.
+
+### Version
+
+```swift
+let info = try await OdxApiV2.version()            // OdxV2VersionInfo
+print(info.result?.version ?? "", info.result?.major ?? 0)   // "20.0+e", 20
+let ok = try await OdxApiV2.isSupported()          // true on Odoo 19+, cached per URL
+```
+
+### Method reference
+
+| Method | Odoo method | Arguments sent | `result` |
+|---|---|---|---|
+| `search(model:domain:offset:limit:order:context:id:)` | `search` | `domain`, `offset`, `limit`, `order` | `[Int]` |
+| `searchRead(model:domain:fields:offset:limit:order:context:id:)` | `search_read` | `domain`, `fields`, `offset`, `limit`, `order` | `[T]` |
+| `searchCount(model:domain:limit:context:id:)` | `search_count` | `domain`, `limit` | `Int` |
+| `read(model:ids:fields:load:context:id:)` | `read` | `ids`, `fields`, `load` | `[T]` |
+| `fieldsGet(model:allfields:attributes:context:id:)` | `fields_get` | `allfields`, `attributes` | `T` |
+| `create(model:values:context:id:)` | `create` | `vals_list` (array) | `[Int]` |
+| `createOne(model:values:context:id:)` | `create` | `vals_list: [values]` | `Int` |
+| `write(model:ids:values:context:id:)` | `write` | `ids`, `vals` | `Bool` |
+| `remove(model:ids:context:id:)` | `unlink` | `ids` | `Bool` |
+| `callMethod(model:method:ids:kwargs:context:id:)` | *method* | `ids` (if given) + `kwargs` | `T` |
+| `version(url:id:)` | – | `POST /v2/odoo/version` | `OdxV2VersionInfo` |
+| `isSupported(url:)` | – | uses `version` | `Bool` (cached) |
+
+`context` is always merged over `defaultContext` and sent as `kwargs.context`.
+
+### v2 errors
+
+v2 uses the same `OdxProxyError` cases, plus:
+
+| Case / helper | When |
+|---|---|
+| `.json2Unavailable(_)` | Proxy code `-32006`: no JSON-2 on that Odoo (≤18, use `OdxApi`), or the database is not selectable on that host (`dbfilter`). |
+| `.invalidRequest(_)` | Proxy code `-32007` (HTTP 400): invalid model/method name, or `db`/`apiKey` not valid as an HTTP header. Odoo was not contacted. |
+| `.odooLogic(_)` + `error.odooStatus` | Odoo's own error, with its HTTP status: `401` Odoo API key invalid/expired (≠ `.authFailure`, which is the proxy key), `403` access rights or private method, `404` unknown model/method or missing record, `409` lock conflict, `422` validation error or bad arguments, `5xx` server error. |
+| `error.odooErrorName` | Odoo's exception class from `data.name`, e.g. `"odoo.exceptions.ValidationError"`. |
+| `error.isRetryable` | `true` for `.upstreamConnect` and Odoo `409`. Timeouts are excluded, because the call may already have run. |
+
+```swift
+do {
+    _ = try await OdxApiV2.createOne(model: "res.partner", values: OdxParams([:]))
+} catch let error as OdxProxyError where error.odooStatus == 422 {
+    showAlert(error.localizedDescription)           // e.g. a required field is missing
+} catch let error as OdxProxyError where error.odooStatus == 401 {
+    promptForNewOdooKey()                           // the Odoo key expired or was revoked
+} catch OdxProxyError.json2Unavailable {
+    // Odoo 18 or older (use OdxApi), or a dbfilter / database mismatch
+}
+```
+
+---
+
 ## 4. Ops API reference (`OdxOps`)
 
 Operational, non-data endpoints. Kept separate from `OdxApi` per the proxy spec.
@@ -746,6 +900,8 @@ The client throws `OdxProxyError`. The major cases:
 | `.upstreamConnect(_)` | Proxy couldn't connect to Odoo (proxy code `-32004`). |
 | `.proxyInternal(_)` | Internal proxy error (proxy code `-32005`). |
 | `.licenseInvalid(_)` | Proxy license expired/invalid (proxy code `0`, HTTP 403). |
+| `.json2Unavailable(_)` | **v2 only.** No JSON-2 on that Odoo, or DB not selectable (proxy code `-32006`). See §3a. |
+| `.invalidRequest(_)` | **v2 only.** Invalid model/method name or header-unsafe db/key (proxy code `-32007`). See §3a. |
 | `.odooLogic(_)` | Odoo-side business error (200 OK + error envelope, e.g. validation, access denied). |
 | `.serverError(_)` | Unknown error code — fallback. |
 
@@ -863,6 +1019,19 @@ swift test
 `TestCredentials.swift` is gitignored — your credentials never get committed. If any field is left empty, the entire suite is **skipped** (not failed) via `@Suite(.disabled(if: !TestCredentials.isConfigured))`, so a clean clone passes by default.
 
 All tests are READ-ONLY against `res.partner`. To add mutating tests (create/write/unlink), gate them on a separate flag.
+
+### v2 tests
+
+- `OdxApiV2Tests` is offline and always runs. It asserts the exact JSON each `OdxApiV2` method sends, and the error mapping.
+- `OdxApiV2LiveTests` needs **ODXProxy 0.9.0+ in front of Odoo 19+**. It reads environment variables instead of `TestCredentials.swift`, so it can target a different proxy:
+
+```bash
+ODX_V2_GATEWAY_URL=http://127.0.0.1:3000 ODX_V2_API_KEY=<proxy key> \
+ODX_V2_ODOO_URL=https://erp.example.com ODX_V2_ODOO_DB=prod ODX_V2_ODOO_API_KEY=<odoo api key> \
+swift test --filter OdxApiV2Live
+```
+
+The read-only suite runs with just those variables. The create/write/remove suite also needs `ODX_V2_ALLOW_WRITES=1`, because it creates and deletes `res.partner` records. Both live suites configure the shared client, so when `TestCredentials.swift` is also filled in, run them with `--filter` rather than together.
 
 ---
 
