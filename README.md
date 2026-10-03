@@ -29,18 +29,18 @@ The wire protocol is documented in [`SYSTEM_ARCHITECTURE.md`](SYSTEM_ARCHITECTUR
 In Xcode: **File → Add Packages…** and enter the repository URL:
 
 ```
-https://github.com/terrakernel/odxproxyswift.git
+https://github.com/terrakernel/ODXProxyClient-Swift.git
 ```
 
 Or in your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/terrakernel/odxproxyswift.git", from: "1.1.0") // 1.1.0+ for OdxApiV2
+    .package(url: "https://github.com/terrakernel/ODXProxyClient-Swift.git", from: "1.1.0") // 1.1.0+ for OdxApiV2
 ],
 targets: [
     .target(name: "YourApp", dependencies: [
-        .product(name: "ODXProxyClientSwift", package: "odxproxyswift")
+        .product(name: "ODXProxyClientSwift", package: "ODXProxyClient-Swift")
     ])
 ]
 ```
