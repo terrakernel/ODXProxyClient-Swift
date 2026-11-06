@@ -68,7 +68,7 @@ struct MyApp: App {
                     apiKey: "<odoo user api key>"
                 ),
                 odxApiKey: "<proxy x-api-key>",
-                gatewayUrl: "https://gateway.odxproxy.io"
+                gatewayUrl: "https://odxproxy.teka.it.com"
             )
         )
     }
@@ -135,7 +135,7 @@ struct MyApp: App {
         let clientInfo = OdxProxyClientInfo(
             instance: odooInstance,
             odxApiKey: "<proxy x-api-key>",
-            gatewayUrl: "https://gateway.odxproxy.io"   // optional; this is the default
+            gatewayUrl: "https://odxproxy.teka.it.com"   // optional; this is the default
         )
 
         OdxProxyClient.shared.configure(with: clientInfo)
@@ -156,7 +156,7 @@ struct MyApp: App {
 | `OdxInstanceInfo.db` | Odoo database name. |
 | `OdxInstanceInfo.apiKey` | The **Odoo** user's API key (created in Odoo under user preferences → Account Security). **Not** the proxy key. |
 | `OdxProxyClientInfo.odxApiKey` | The **proxy's** `x-api-key` header value. Different from the Odoo key above. |
-| `OdxProxyClientInfo.gatewayUrl` | Base URL of the ODX proxy. Trailing slash is fine — the client strips it. Defaults to `https://gateway.odxproxy.io` when `nil`. |
+| `OdxProxyClientInfo.gatewayUrl` | Base URL of the ODX proxy. Trailing slash is fine — the client strips it. Defaults to `https://odxproxy.teka.it.com` when `nil`. |
 
 ### Optional: custom request timeout
 

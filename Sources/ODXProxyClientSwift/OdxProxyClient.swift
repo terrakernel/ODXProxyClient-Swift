@@ -28,7 +28,7 @@ public final class OdxProxyClient: @unchecked Sendable {
     private init() {}
 
     public func configure(with options: OdxProxyClientInfo, timeout: Int? = nil) {
-        var gatewayUrlString = options.gatewayUrl ?? "https://gateway.odxproxy.io"
+        var gatewayUrlString = options.gatewayUrl ?? "https://odxproxy.teka.it.com"
         if gatewayUrlString.hasSuffix("/") {
             gatewayUrlString = String(gatewayUrlString.dropLast())
         }

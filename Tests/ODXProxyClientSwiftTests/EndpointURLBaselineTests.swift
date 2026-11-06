@@ -62,19 +62,19 @@ struct EndpointURLBaselineTests {
 
     @Test("Default gateway resolves to the six documented endpoints")
     func defaultGateway_baseline() throws {
-        let e = try #require(buildEndpoints(gateway: "https://gateway.odxproxy.io"))
-        #expect(e.execute == "https://gateway.odxproxy.io/api/odoo/execute")
-        #expect(e.version == "https://gateway.odxproxy.io/api/odoo/version")
-        #expect(e.about   == "https://gateway.odxproxy.io/_/about")
-        #expect(e.license == "https://gateway.odxproxy.io/_/license")
-        #expect(e.v2Execute == "https://gateway.odxproxy.io/v2/odoo/execute")
-        #expect(e.v2Version == "https://gateway.odxproxy.io/v2/odoo/version")
+        let e = try #require(buildEndpoints(gateway: "https://odxproxy.teka.it.com"))
+        #expect(e.execute == "https://odxproxy.teka.it.com/api/odoo/execute")
+        #expect(e.version == "https://odxproxy.teka.it.com/api/odoo/version")
+        #expect(e.about   == "https://odxproxy.teka.it.com/_/about")
+        #expect(e.license == "https://odxproxy.teka.it.com/_/license")
+        #expect(e.v2Execute == "https://odxproxy.teka.it.com/v2/odoo/execute")
+        #expect(e.v2Version == "https://odxproxy.teka.it.com/v2/odoo/version")
     }
 
     @Test("Trailing slash on the gateway is stripped, not doubled")
     func trailingSlashGateway_matchesDefault() throws {
-        let withSlash = try #require(buildEndpoints(gateway: "https://gateway.odxproxy.io/"))
-        let without   = try #require(buildEndpoints(gateway: "https://gateway.odxproxy.io"))
+        let withSlash = try #require(buildEndpoints(gateway: "https://odxproxy.teka.it.com/"))
+        let without   = try #require(buildEndpoints(gateway: "https://odxproxy.teka.it.com"))
         #expect(withSlash == without)
         // No double slash between host and first path component.
         #expect(!withSlash.execute.contains("io//"))
@@ -82,7 +82,7 @@ struct EndpointURLBaselineTests {
 
     @Test("Leading slash in the appended path component does not produce a double slash")
     func leadingSlashPathComponent_noDoubleSlash() throws {
-        let e = try #require(buildEndpoints(gateway: "https://gateway.odxproxy.io"))
+        let e = try #require(buildEndpoints(gateway: "https://odxproxy.teka.it.com"))
         for url in [e.execute, e.version, e.about, e.license, e.v2Execute, e.v2Version] {
             // Only the scheme separator "://" may contain a double slash.
             let afterScheme = url.replacingOccurrences(of: "https://", with: "")
@@ -103,7 +103,7 @@ struct EndpointURLBaselineTests {
 
     @Test("ODXBrain routes resolve under the gateway, including a subpath")
     func brainRoutes() throws {
-        for (gateway, prefix) in [("https://gateway.odxproxy.io/", "https://gateway.odxproxy.io"),
+        for (gateway, prefix) in [("https://odxproxy.teka.it.com/", "https://odxproxy.teka.it.com"),
                                   ("https://example.com/proxy", "https://example.com/proxy")] {
             var raw = gateway
             if raw.hasSuffix("/") { raw = String(raw.dropLast()) }
