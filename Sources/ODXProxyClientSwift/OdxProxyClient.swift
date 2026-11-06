@@ -12,6 +12,9 @@ public final class OdxProxyClient: @unchecked Sendable {
         let licenseURL: URL
         let v2ExecuteURL: URL
         let v2VersionURL: URL
+        let brainResolveURL: URL
+        let brainSOPsResolveURL: URL
+        let brainInfoURL: URL
         let odooInstance: OdxInstanceInfo
         let defaultContext: OdxContext?
     }
@@ -58,6 +61,9 @@ public final class OdxProxyClient: @unchecked Sendable {
             licenseURL: gatewayUrl.appendingPathComponent("/_/license"),
             v2ExecuteURL: gatewayUrl.appendingPathComponent("/v2/odoo/execute"),
             v2VersionURL: gatewayUrl.appendingPathComponent("/v2/odoo/version"),
+            brainResolveURL: gatewayUrl.appendingPathComponent("/brain/v1/resolve"),
+            brainSOPsResolveURL: gatewayUrl.appendingPathComponent("/brain/v1/sops/resolve"),
+            brainInfoURL: gatewayUrl.appendingPathComponent("/brain/v1/info"),
             odooInstance: options.instance,
             defaultContext: options.defaultContext
         )
@@ -96,13 +102,22 @@ public final class OdxProxyClient: @unchecked Sendable {
 
     // MARK: - Internal request helpers
 
+    /// Which error mapping a response goes through. On `/brain/*`, an HTTP 200
+    /// `error` carries ODXBrain's status, not Odoo's, and a bare 404 means the
+    /// proxy predates ODXBrain (SYSTEM_ARCHITECTURE.md §6, §7.2).
+    private enum Route {
+        case odoo
+        case brain
+    }
+
     /// POST an Encodable body to `url`, decoding the response as a JSON-RPC
     /// envelope `OdxServerResponse<T>`. Maps `error` objects through
     /// `OdxProxyError.from(_:httpStatus:)` so the caller catches a typed error.
     private func postEnvelope<B: Encodable & Sendable, T: Codable & Sendable>(
         snapshot: Config,
         url: URL,
-        body: B
+        body: B,
+        route: Route = .odoo
     ) async throws -> OdxServerResponse<T> {
         try Task.checkCancellation()
 
@@ -110,20 +125,48 @@ public final class OdxProxyClient: @unchecked Sendable {
         request.httpMethod = "POST"
         request.httpBody = try encoder.encode(body)
 
+        return try await send(snapshot: snapshot, request: request, route: route)
+    }
+
+    /// GET `url`, decoding the response as a JSON-RPC envelope `OdxServerResponse<T>`.
+    private func getEnvelope<T: Codable & Sendable>(
+        snapshot: Config,
+        url: URL,
+        route: Route
+    ) async throws -> OdxServerResponse<T> {
+        try Task.checkCancellation()
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        return try await send(snapshot: snapshot, request: request, route: route)
+    }
+
+    private func send<T: Codable & Sendable>(
+        snapshot: Config,
+        request: URLRequest,
+        route: Route
+    ) async throws -> OdxServerResponse<T> {
         let (data, response) = try await snapshot.session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw OdxProxyError.invalidResponse(nil)
         }
+        let status = httpResponse.statusCode
 
-        guard (200...299).contains(httpResponse.statusCode) else {
-            let parsed = try? decoder.decode(OdxServerResponse<T>.self, from: data)
-            let raw = parsed?.error ?? OdxServerErrorResponse(
-                code: httpResponse.statusCode,
-                message: "Unknown server error",
-                data: nil
-            )
-            throw OdxProxyError.from(raw, httpStatus: httpResponse.statusCode)
+        guard (200...299).contains(status) else {
+            if let error = (try? decoder.decode(OdxServerResponse<T>.self, from: data))?.error {
+                throw map(error, httpStatus: status, route: route)
+            }
+            switch route {
+            case .odoo:
+                throw OdxProxyError.from(
+                    OdxServerErrorResponse(code: status, message: "Unknown server error", data: nil),
+                    httpStatus: status
+                )
+            case .brain:
+                throw OdxProxyError.fromBrainNonEnvelope(httpStatus: status, body: data)
+            }
         }
 
         try Task.checkCancellation()
@@ -135,9 +178,16 @@ public final class OdxProxyClient: @unchecked Sendable {
             throw OdxProxyError.decodingError(error)
         }
         if let error = decodedResponse.error {
-            throw OdxProxyError.from(error, httpStatus: httpResponse.statusCode)
+            throw map(error, httpStatus: status, route: route)
         }
         return decodedResponse
+    }
+
+    private func map(_ error: OdxServerErrorResponse, httpStatus: Int, route: Route) -> OdxProxyError {
+        switch route {
+        case .odoo: return OdxProxyError.from(error, httpStatus: httpStatus)
+        case .brain: return OdxProxyError.fromBrain(error, httpStatus: httpStatus)
+        }
     }
 
     /// GET a flat JSON object from `url`, decoding directly as `T`.
@@ -203,6 +253,25 @@ public final class OdxProxyClient: @unchecked Sendable {
     internal func getAboutInfo() async throws -> OdxServerResponse<OdxAboutInfo> {
         let snapshot = try snapshotConfig()
         return try await getRaw(snapshot: snapshot, url: snapshot.aboutURL)
+    }
+
+    internal func postBrainResolve<T: Codable & Sendable>(
+        body: OdxBrainRequest
+    ) async throws -> OdxServerResponse<T> {
+        let snapshot = try snapshotConfig()
+        return try await postEnvelope(snapshot: snapshot, url: snapshot.brainResolveURL, body: body, route: .brain)
+    }
+
+    internal func postBrainSOPsResolve<T: Codable & Sendable>(
+        body: OdxBrainRequest
+    ) async throws -> OdxServerResponse<T> {
+        let snapshot = try snapshotConfig()
+        return try await postEnvelope(snapshot: snapshot, url: snapshot.brainSOPsResolveURL, body: body, route: .brain)
+    }
+
+    internal func getBrainInfo<T: Codable & Sendable>() async throws -> OdxServerResponse<T> {
+        let snapshot = try snapshotConfig()
+        return try await getEnvelope(snapshot: snapshot, url: snapshot.brainInfoURL, route: .brain)
     }
 
     internal func getLicenseInfo() async throws -> OdxLicenseInfo {

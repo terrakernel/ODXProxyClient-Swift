@@ -17,6 +17,7 @@ The wire protocol is documented in [`SYSTEM_ARCHITECTURE.md`](SYSTEM_ARCHITECTUR
 - **Cancellation-aware.** Honors `Task` cancellation between network and decode, so a SwiftUI view that disappears mid-request doesn't waste CPU finishing a decode nobody wants.
 - **Singleton client.** One configure call, one shared instance.
 - **v2 API for Odoo 19+ (`OdxApiV2`).** Reaches Odoo over its JSON-2 API through ODXProxy 0.9.0+, with named arguments and Odoo's HTTP status on errors. It's ready for Odoo 22, which removes the `/jsonrpc` endpoint that `OdxApi` (v1) relies on.
+- **ODXBrain (`OdxBrain`).** Asks ODXProxy 0.10.0+ which Odoo model holds some data, or which SOP covers a task: the lookup an LLM agent does before planning an Odoo call.
 
 ## Requirements
 
@@ -36,7 +37,7 @@ Or in your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/terrakernel/ODXProxyClient-Swift.git", from: "1.1.0") // 1.1.0+ for OdxApiV2
+    .package(url: "https://github.com/terrakernel/ODXProxyClient-Swift.git", from: "1.2.0") // 1.1.0+ for OdxApiV2, 1.2.0+ for OdxBrain
 ],
 targets: [
     .target(name: "YourApp", dependencies: [
@@ -727,6 +728,78 @@ do {
 
 ---
 
+## 3b. ODXBrain (`OdxBrain`)
+
+ODXBrain is an optional sidecar on ODXProxy **0.10.0+**. It answers two questions for an LLM that is planning Odoo calls: *which model holds this?* and *which SOP covers this task?* It never contacts Odoo and needs no Odoo credentials: it uses the same `configure(with:)` and proxy `x-api-key`, and `odoo_instance` is never sent.
+
+```swift
+guard try await OdxBrain.isAvailable() else { return }   // GET /_/about → features.odxbrain
+
+let facts = try await OdxApiV2.brainFacts()              // or OdxApi.brainFacts() on Odoo ≤ 18
+let models = try await OdxBrain.resolveModel(
+    query: "which invoice is not paid yet",
+    odooVersion: facts.odooVersion,
+    edition: facts.edition
+)
+for candidate in models.result?.candidates ?? [] {        // every candidate, in order
+    let fields: OdxServerResponse<[String: OdxParams]> = try await OdxApiV2.fieldsGet(model: candidate.model)
+    // ...
+}
+
+let sop = try await OdxBrain.resolveSOP(
+    query: "record a vendor bill from a purchase order",
+    odooVersion: facts.odooVersion,
+    edition: facts.edition,
+    installedModules: ["account", "purchase"]
+)
+if sop.result?.match == "none" {
+    // no confident match: ask the user, don't run the nearest SOP
+}
+```
+
+| Method | Route | Returns |
+|---|---|---|
+| `isAvailable()` | `GET /_/about` | `Bool`. `true` means configured, not "up right now". A proxy older than 0.10.0 reads as `false`. |
+| `resolveModel(query:odooVersion:edition:k:extra:id:)` | `POST /brain/v1/resolve` | `OdxServerResponse<OdxBrainModelResolution>` |
+| `resolveSOP(query:odooVersion:edition:installedModules:company:k:extra:id:)` | `POST /brain/v1/sops/resolve` | `OdxServerResponse<OdxBrainSOPResolution>` |
+| `info()` | `GET /brain/v1/info` | `OdxServerResponse<OdxParams>`, ODXBrain's raw `/info` |
+| `OdxApi.brainFacts(url:)` / `OdxApiV2.brainFacts(url:)` | the version endpoint | `OdxBrainFacts` (`odooVersion`, `edition`), cached per URL |
+
+Things to get right:
+
+- **Don't guess facts.** A `nil` `odooVersion` or `edition` is left out of the request and filters nothing. A wrong one silently removes correct answers, so take them from `brainFacts`.
+- **Use every candidate, in order.** The order is the contract; the score scale isn't. There is deliberately no `minScore` or "best match" accessor.
+- **Check a SOP's `title` against the task** before acting on it. Embeddings match the topic, not the operation, so "cancel a vendor bill" can rank *Record a vendor bill* first.
+- **Nothing is dropped from results.** Conditional fields are typed (`excluded`, `filtered`, `versionUnaudited`, `provisional`, `match`, `factsMissing`). Anything else ODXBrain adds later is in `raw`. Fields ODXBrain accepts that this SDK doesn't name yet go in `extra:`.
+- `embeddingModel`, `dim`, `corpusVersion` and `sops.root` identify the model and corpus that answered. Log them: a swap changes answers without erroring.
+- The proxy gives ODXBrain 5 seconds by default. Keep `configure(timeout:)` above that.
+
+### ODXBrain errors
+
+| Case / helper | When | Retry? |
+|---|---|---|
+| `.brainNotInstalled(_)` | ODXBrain isn't installed on this proxy (`-32008`, HTTP 501), or the proxy is older than 0.10.0 (bare 404). Hide the feature. | never |
+| `.brainUnreachable(_)` | Installed but unreachable right now (`-32009`, HTTP 502). | once |
+| `.brainTimeout(_)` | ODXBrain timed out (`-32010`, HTTP 504). | once |
+| `.brainMisconfigured(_)` | ODXBrain rejected **the proxy's** key (`-32011`, HTTP 502). An operator problem; your key was accepted, so this is not `.authFailure`. | no |
+| `.brainError(_)` + `error.brainStatus` | ODXBrain's own error on HTTP 200: `400` bad input, `503` an index isn't loaded, `500` internal. | no |
+| `error.brainErrorType` | ODXBrain's `data.type`, e.g. `invalid_request_error`, `corpus_unavailable`, `sops_unavailable`. Branch on this, not on the message. | |
+
+`error.isRetryable` is `true` for `.brainUnreachable` and `.brainTimeout`. `.authFailure` and `.licenseInvalid` behave as on every other route.
+
+```swift
+do {
+    let sop = try await OdxBrain.resolveSOP(query: task)
+    // ...
+} catch OdxProxyError.brainNotInstalled {
+    hideSOPSuggestions()                            // permanent for this deployment
+} catch let error as OdxProxyError where error.brainErrorType == "sops_unavailable" {
+    // ODXBrain is up, but has no SOP set loaded
+}
+```
+
+---
+
 ## 4. Ops API reference (`OdxOps`)
 
 Operational, non-data endpoints. Kept separate from `OdxApi` per the proxy spec.
@@ -902,6 +975,7 @@ The client throws `OdxProxyError`. The major cases:
 | `.licenseInvalid(_)` | Proxy license expired/invalid (proxy code `0`, HTTP 403). Odoo 19+ also uses code `0` for its own `/jsonrpc` errors; those arrive on HTTP 200 as `.odooLogic`. |
 | `.json2Unavailable(_)` | **v2 only.** No JSON-2 on that Odoo, or DB not selectable (proxy code `-32006`). See §3a. |
 | `.invalidRequest(_)` | **v2 only.** Invalid model/method name or header-unsafe db/key (proxy code `-32007`). See §3a. |
+| `.brainNotInstalled(_)`, `.brainUnreachable(_)`, `.brainTimeout(_)`, `.brainMisconfigured(_)`, `.brainError(_)` | **`OdxBrain` only** (proxy codes `-32008`…`-32011`, and ODXBrain's own errors). See §3b. |
 | `.odooLogic(_)` | Odoo-side business error (200 OK + error envelope, e.g. validation, access denied). |
 | `.serverError(_)` | Unknown error code — fallback. |
 
@@ -1032,6 +1106,16 @@ swift test --filter OdxApiV2Live
 ```
 
 The read-only suite runs with just those variables. The create/write/remove suite also needs `ODX_V2_ALLOW_WRITES=1`, because it creates and deletes `res.partner` records. Both live suites configure the shared client, so when `TestCredentials.swift` is also filled in, run them with `--filter` rather than together.
+
+### ODXBrain tests
+
+- `OdxBrainTests` is offline and always runs. It covers the request body, error mapping, result decoding and facts derivation.
+- `OdxBrainLiveTests` is read-only and needs ODXProxy 0.10.0+ with ODXBrain. It's opted in with `ODX_BRAIN_LIVE=1`, plus `ODX_PROXY_URL` and `ODX_PROXY_API_KEY`. `ODX_PROXY_NOBRAIN_URL` (a proxy without ODXBrain), `ODX_PROXY_NOSOPS_URL` (ODXBrain without SOPs) and `ODOO_URL` (for `brainFacts`) each enable more tests.
+
+```bash
+ODX_BRAIN_LIVE=1 ODX_PROXY_URL=http://127.0.0.1:6600 ODX_PROXY_API_KEY=<proxy key> \
+swift test --filter OdxBrainLive
+```
 
 ---
 

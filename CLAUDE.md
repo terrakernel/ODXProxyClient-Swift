@@ -41,11 +41,15 @@ All integration tests are READ-ONLY against `res.partner`. If you add mutating t
 
 `OdxApiV2LiveTests` is gated by env vars (`ODX_V2_GATEWAY_URL`, `ODX_V2_API_KEY`, `ODX_V2_ODOO_URL`, `ODX_V2_ODOO_DB`, `ODX_V2_ODOO_API_KEY`), not `TestCredentials.swift`. Mutating tests also need `ODX_V2_ALLOW_WRITES=1`. Both it and the v1 integration suite configure the shared singleton, so run them separately with `--filter` when both are configured. Verified 2026-10-01 against a local ODXProxy 0.9.0 → Odoo 20.0+e (7/7). The v1 integration suite also passed 9/9 through that 0.9.0 proxy.
 
+## ODXBrain live tests
+
+`OdxBrainLiveTests` is read-only. It's opted in with `ODX_BRAIN_LIVE=1` plus `ODX_PROXY_URL` / `ODX_PROXY_API_KEY`. The optional `ODX_PROXY_NOBRAIN_URL`, `ODX_PROXY_NOSOPS_URL` and `ODOO_URL` match the names `~/odx-it/sdk/env.sh` exports: `source ~/odx-it/sdk/env.sh && ODX_BRAIN_LIVE=1 swift test --filter OdxBrainLive`. Like the other live suites, it reconfigures the singleton, so run it alone.
+
 ## Architecture
 
-Six source files in `Sources/ODXProxyClientSwift/`:
+Seven source files in `Sources/ODXProxyClientSwift/`:
 
-- **`OdxProxyClient.swift`** — singleton (`OdxProxyClient.shared`), `final class`, `@unchecked Sendable`. Holds an `NSLock`-protected `Config` snapshot (URLSession, four cached endpoint URLs, OdxInstanceInfo) plus a `configurationError` sentinel. Exposes internal helpers `postExecuteRPC`, `postVersionRequest`, `getAboutInfo`, `getLicenseInfo`. All share two private helpers — `postEnvelope` (POST → `OdxServerResponse<T>`) and `getRaw` (GET → flat `T`). Both call `Task.checkCancellation()` before encode and again before decode.
+- **`OdxProxyClient.swift`** — singleton (`OdxProxyClient.shared`), `final class`, `@unchecked Sendable`. Holds an `NSLock`-protected `Config` snapshot (URLSession, the cached endpoint URLs for v1, v2, ops and `/brain/v1/*`, OdxInstanceInfo) plus a `configurationError` sentinel. Exposes internal helpers `postExecuteRPC`, `postVersionRequest`, `postV2*`, `postBrain*`, `getBrainInfo`, `getAboutInfo`, `getLicenseInfo`. Envelope routes go through `postEnvelope` (POST) / `getEnvelope` (GET) → `send(snapshot:request:route:)` → `OdxServerResponse<T>`; `route` (`.odoo` / `.brain`) picks the error mapper. `getRaw` (GET → flat `T`) is used for the ops routes. All of them call `Task.checkCancellation()` before encode and again before decode.
 - **`OdxApi.swift`** — public `enum` with static methods for the data API (`/api/odoo/execute`): `search`, `searchRead`, `read`, `fieldsGet`, `searchCount`, `create`, `write`/`update`, `remove`, `callMethod`, `version`. Each builds an `OdxClientRequest`, strips pagination/ordering keywords where irrelevant, and delegates to the client.
 - **`OdxApiV2.swift`**: public `enum` for the **v2** data API (ODXProxy 0.9.0+ `/v2/odoo/*`, Odoo JSON-2, Odoo 19+). It shares the singleton and instance with `OdxApi`.
   - Each public method maps its labelled parameters through an internal `OdxV2Call` constructor (Odoo method + `OdxV2Kwargs`), then through `makeRequest`, which is pure and is where the call `context` is merged over `defaultContext`.
@@ -56,9 +60,14 @@ Six source files in `Sources/ODXProxyClientSwift/`:
   - `remove` sends `unlink`.
   - `isSupported` caches per URL in a private actor.
   - Keep the parameter → wire mapping in `OdxV2Call` so `OdxApiV2Tests` can assert it offline.
+- **`OdxBrain.swift`**: public `enum` for **ODXBrain** (ODXProxy 0.10.0+ `/brain/v1/*`, spec §4.8–§4.10, §7.2): `isAvailable` (reads `/_/about` `features.odxbrain`), `resolveModel`, `resolveSOP`, `info`, plus the `OdxApi.brainFacts` / `OdxApiV2.brainFacts` extensions.
+  - No Odoo credentials; never sends `odoo_instance`.
+  - The parameter → wire mapping lives in `OdxBrainCall` (`OdxV2Kwargs` underneath, so `nil` is omitted, never `null`). `extra` passes unknown fields through; the named parameters win.
+  - Results (`OdxBrainModelResolution`, `OdxBrainSOPResolution`) decode typed fields **and** keep the whole object in `raw`; encoding writes `raw`. Never filter or threshold candidates on `score`.
+  - The brain routes go through `send(...)` with `route: .brain`. That route maps HTTP-200 errors through `OdxProxyError.fromBrain`, so ODXBrain's 400/503/500 become `.brainError`, not `.odooLogic`. It also maps a bare 404 or a plain-text 400/422 through `fromBrainNonEnvelope`.
 - **`OdxOps.swift`** — public `enum` for ops endpoints (`/_/about`, `/_/license`). Kept separate from `OdxApi` per spec §7.10 (ops, not data API).
 - **`OdxModels.swift`** — request/response Codable types: `OdxClientRequest`, `OdxServerResponse<T>`, `OdxServerErrorResponse`, `OdxVersionRequest`, `OdxAboutInfo`, `OdxLicenseInfo`, the v2 types (`OdxContext`, `OdxV2VersionInfo`, internal `OdxV2Request`/`OdxV2Kwargs`/`OdxV2Instance`; `OdxProxyClientInfo.defaultContext` is v2-only), plus the `OdxParams` recursive enum and `OdxMany2One`/`OptionalOdxValue<T>` helpers for Odoo's loose JSON conventions.
-- **`OdxErrors.swift`** — `OdxProxyError` enum with typed cases mapped from JSON-RPC codes (`authFailure`, `invalidAction`, `missingFunctionName`, `upstreamTimeout`, `upstreamConnect`, `proxyInternal`, `licenseInvalid`, `json2Unavailable` -32006, `invalidRequest` -32007, `odooLogic`), plus `notConfigured` / `invalidURL` / `networkError` / `invalidResponse` / `decodingError` / `serverError`. `from(_:httpStatus:)` is the central mapper.
+- **`OdxErrors.swift`** — `OdxProxyError` enum with typed cases mapped from JSON-RPC codes (`authFailure`, `invalidAction`, `missingFunctionName`, `upstreamTimeout`, `upstreamConnect`, `proxyInternal`, `licenseInvalid`, `json2Unavailable` -32006, `invalidRequest` -32007, `brainNotInstalled` -32008 / bare 404, `brainUnreachable` -32009, `brainTimeout` -32010, `brainMisconfigured` -32011, `brainError` (ODXBrain's status on HTTP 200), `odooLogic`), plus `notConfigured` / `invalidURL` / `networkError` / `invalidResponse` / `decodingError` / `serverError`. `from(_:httpStatus:)` is the central mapper.
 - **`Helper.swift`** — `AnyEncodable` / `AnyCodable` for heterogeneous JSON, a fast hex-table `ULID` (request id, not a real ULID — low 40 bits of timestamp + 16 random hex chars), `String.DefaultOrFalse` / `Array.DefaultOrFalse` (return `Any`, fragile but kept for caller compatibility).
 
 ### Threading (this library is built for SwiftUI)
@@ -70,7 +79,7 @@ Specific design choices that protect this:
 - `JSONEncoder` and `JSONDecoder` are stored properties on the singleton (no per-call allocation).
 - `URLSessionConfiguration.ephemeral` — no `URLCache` writes; authenticated responses don't sit in shared caches.
 - The previous `URLSession` is `finishTasksAndInvalidate()`-ed on every `configure(...)` to avoid leaks.
-- `Task.checkCancellation()` is called before encode and before decode in `postEnvelope` / `getRaw`. When a SwiftUI view disappears mid-request, the work doesn't waste CPU finishing a decode nobody wants.
+- `Task.checkCancellation()` is called before encode and before decode in `postEnvelope` / `getEnvelope` / `getRaw`. When a SwiftUI view disappears mid-request, the work doesn't waste CPU finishing a decode nobody wants.
 
 If you reintroduce `@MainActor`, `Task.detached`, or background-decode helpers, you'll undo PR B. The point of dropping all three was to let SE-0338 handle off-main execution naturally.
 

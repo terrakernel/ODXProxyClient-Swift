@@ -341,10 +341,33 @@ public struct OdxVersionRequest: Encodable, Sendable {
 public struct OdxAboutInfo: Codable, Sendable {
     public let build: String
     public let version: String
+    /// Optional sidecars the proxy is configured for, e.g. `["odxbrain": .bool(true)]`.
+    /// Empty for proxies older than 0.10.0, which don't send `features`.
+    public let features: [String: OdxParams]
 
-    public init(build: String, version: String) {
+    enum CodingKeys: String, CodingKey {
+        case build, version, features
+    }
+
+    public init(build: String, version: String, features: [String: OdxParams] = [:]) {
         self.build = build
         self.version = version
+        self.features = features
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        build = try container.decode(String.self, forKey: .build)
+        version = try container.decode(String.self, forKey: .version)
+        features = try container.decodeIfPresent([String: OdxParams].self, forKey: .features) ?? [:]
+    }
+
+    /// Whether `features[name]` is `true`. A missing key, or any non-`true` value,
+    /// reads as `false`. `true` means the proxy is configured for the feature, not
+    /// that the sidecar is up right now.
+    public func hasFeature(_ name: String) -> Bool {
+        if case .bool(true)? = features[name] { return true }
+        return false
     }
 }
 
@@ -693,5 +716,239 @@ struct OdxV2Request: Encodable, Sendable {
         case id, method, kwargs
         case modelId = "model_id"
         case odooInstance = "odoo_instance"
+    }
+}
+
+
+// MARK: - ODXBrain (ODXProxy 0.10.0+, SYSTEM_ARCHITECTURE.md §4.8–§4.10, §7.2)
+
+/// Odoo edition, as ODXBrain filters by it.
+public enum OdxBrainEdition: String, Codable, Sendable {
+    case community
+    case enterprise
+}
+
+/// The facts about an Odoo instance that ODXBrain filters by. A `nil` fact is
+/// omitted from the request, which filters nothing; never guess one, because a
+/// wrong version silently removes correct answers.
+public struct OdxBrainFacts: Codable, Sendable, Equatable {
+    /// Odoo's serie, e.g. `"20.0"` or `"saas~16.3"`.
+    public var odooVersion: String?
+    public var edition: OdxBrainEdition?
+
+    enum CodingKeys: String, CodingKey {
+        case odooVersion = "odoo_version"
+        case edition
+    }
+
+    public init(odooVersion: String? = nil, edition: OdxBrainEdition? = nil) {
+        self.odooVersion = odooVersion
+        self.edition = edition
+    }
+
+    /// From a v1 `/api/odoo/version` result: `server_serie`, and enterprise iff
+    /// `server_version` contains `"+e"`.
+    static func fromV1(_ result: [String: OdxParams]) -> OdxBrainFacts {
+        var facts = OdxBrainFacts()
+        if case .string(let serie)? = result["server_serie"], !serie.isEmpty {
+            facts.odooVersion = serie
+        }
+        if case .string(let version)? = result["server_version"] {
+            facts.edition = edition(of: version)
+        }
+        return facts
+    }
+
+    /// From a v2 `/v2/odoo/version` result: the first two `version_info` entries
+    /// joined by `"."`, and enterprise iff `version` contains `"+e"`.
+    static func fromV2(_ result: OdxV2VersionInfo) -> OdxBrainFacts {
+        var facts = OdxBrainFacts()
+        let parts = result.versionInfo.prefix(2).compactMap { part -> String? in
+            switch part {
+            case .number(let n) where n == n.rounded(): return String(Int(n))
+            case .number(let n): return String(n)
+            case .string(let s): return s
+            default: return nil
+            }
+        }
+        if parts.count == 2 {
+            facts.odooVersion = parts.joined(separator: ".")
+        }
+        facts.edition = edition(of: result.version)
+        return facts
+    }
+
+    /// Packaged builds report `"20.0+e-20260925"` and pre-releases `"20.0alpha1+e"`,
+    /// so look for `"+e"` rather than cutting at `"+"`.
+    private static func edition(of version: String) -> OdxBrainEdition? {
+        guard !version.isEmpty else { return nil }
+        return version.contains("+e") ? .enterprise : .community
+    }
+}
+
+/// Token usage ODXBrain reports for a query.
+public struct OdxBrainUsage: Codable, Sendable {
+    public let promptTokens: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case promptTokens = "prompt_tokens"
+    }
+}
+
+/// Result of `OdxBrain.resolveModel`: ranked Odoo models for a question.
+///
+/// `candidates` is every candidate ODXBrain returned, in its order. Ordering is the
+/// contract; the score scale is not, so don't threshold on `score`. Fields this
+/// type doesn't model are kept in `raw`, which is also what encoding writes back.
+public struct OdxBrainModelResolution: Codable, Sendable {
+    public struct Candidate: Codable, Sendable {
+        /// Odoo model name, e.g. `"account.move"`.
+        public let model: String
+        public let score: Double
+        /// The model's availability on that version/edition rests on inference,
+        /// not audited source. `false` when ODXBrain omits it.
+        public let provisional: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case model, score, provisional
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            model = try c.decode(String.self, forKey: .model)
+            score = try c.decode(Double.self, forKey: .score)
+            provisional = try c.decodeIfPresent(Bool.self, forKey: .provisional) ?? false
+        }
+    }
+
+    /// A model that would have ranked but doesn't exist on that Odoo version or edition.
+    public struct Exclusion: Codable, Sendable {
+        public let model: String
+        public let reason: String
+        public let successor: String?
+    }
+
+    public let candidates: [Candidate]
+    /// The embedding model (wire key `model`), e.g. `"bge-m3"`. Watch it, `dim` and
+    /// `corpusVersion`: a swap changes answers without erroring anywhere.
+    public let embeddingModel: String
+    public let dim: Int
+    public let corpusVersion: String
+    public let usage: OdxBrainUsage?
+    /// Empty when ODXBrain sends no `excluded`.
+    public let excluded: [Exclusion]
+    /// `false` when neither `odoo_version` nor `edition` was sent; `nil` when absent.
+    public let filtered: Bool?
+    /// Set when the `odoo_version` sent is newer than the audited range. Its value
+    /// is the newest audited version (e.g. `"19.0"` for a 20.0 query), not the
+    /// version that was sent.
+    public let versionUnaudited: String?
+    /// The whole `result` object as ODXBrain sent it, including fields this type
+    /// doesn't model yet.
+    public let raw: OdxParams
+
+    enum CodingKeys: String, CodingKey {
+        case candidates, dim, usage, excluded, filtered
+        case embeddingModel = "model"
+        case corpusVersion = "corpus_version"
+        case versionUnaudited = "version_unaudited"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        candidates = try c.decode([Candidate].self, forKey: .candidates)
+        embeddingModel = try c.decode(String.self, forKey: .embeddingModel)
+        dim = try c.decode(Int.self, forKey: .dim)
+        corpusVersion = try c.decode(String.self, forKey: .corpusVersion)
+        usage = try c.decodeIfPresent(OdxBrainUsage.self, forKey: .usage)
+        excluded = try c.decodeIfPresent([Exclusion].self, forKey: .excluded) ?? []
+        filtered = try c.decodeIfPresent(Bool.self, forKey: .filtered)
+        versionUnaudited = try c.decodeIfPresent(String.self, forKey: .versionUnaudited)
+        raw = try OdxParams(from: decoder)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try raw.encode(to: encoder)
+    }
+}
+
+/// Result of `OdxBrain.resolveSOP`: ranked SOPs for a task.
+///
+/// `match == "none"` means no SOP is a confident match: stop and ask, don't run the
+/// nearest procedure. Embeddings match the topic, not the operation, so check the
+/// chosen candidate's `title` against the task before acting. The SOP body comes
+/// from the doc manager (`odxdocs`), not from the proxy. Unmodelled fields are
+/// kept in `raw`.
+public struct OdxBrainSOPResolution: Codable, Sendable {
+    public struct Candidate: Codable, Sendable {
+        public let id: String
+        public let version: String
+        public let title: String
+        public let score: Double
+    }
+
+    /// A SOP filtered out on this instance, e.g. `reason: "needs module sale"`.
+    public struct Exclusion: Codable, Sendable {
+        public let id: String
+        public let reason: String
+    }
+
+    /// The approved SOP set the answer came from. Record `root` with any action
+    /// taken, to tie it to that set.
+    public struct SOPSet: Codable, Sendable {
+        public let generation: Int
+        /// 64 hex characters.
+        public let root: String
+    }
+
+    public let candidates: [Candidate]
+    /// The embedding model (wire key `model`), e.g. `"bge-m3"`.
+    public let embeddingModel: String
+    public let dim: Int
+    public let sops: SOPSet
+    /// `"none"` when no SOP is a confident match; `nil` when absent.
+    public let match: String?
+    /// Empty when ODXBrain sends no `excluded`.
+    public let excluded: [Exclusion]
+    /// Facts the caller didn't send, e.g. `["odoo_version", "company"]`. Empty when absent.
+    public let factsMissing: [String]
+    public let usage: OdxBrainUsage?
+    /// The whole `result` object as ODXBrain sent it.
+    public let raw: OdxParams
+
+    enum CodingKeys: String, CodingKey {
+        case candidates, dim, sops, match, excluded, usage
+        case embeddingModel = "model"
+        case factsMissing = "facts_missing"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        candidates = try c.decode([Candidate].self, forKey: .candidates)
+        embeddingModel = try c.decode(String.self, forKey: .embeddingModel)
+        dim = try c.decode(Int.self, forKey: .dim)
+        sops = try c.decode(SOPSet.self, forKey: .sops)
+        match = try c.decodeIfPresent(String.self, forKey: .match)
+        excluded = try c.decodeIfPresent([Exclusion].self, forKey: .excluded) ?? []
+        factsMissing = try c.decodeIfPresent([String].self, forKey: .factsMissing) ?? []
+        usage = try c.decodeIfPresent(OdxBrainUsage.self, forKey: .usage)
+        raw = try OdxParams(from: decoder)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try raw.encode(to: encoder)
+    }
+}
+
+/// Body of `POST /brain/v1/resolve` and `/brain/v1/sops/resolve`: `id` plus the
+/// fields that were set, flat. `nil` fields are omitted, never sent as `null`.
+struct OdxBrainRequest: Encodable, Sendable {
+    let id: String
+    let fields: OdxV2Kwargs
+
+    func encode(to encoder: Encoder) throws {
+        var fields = fields
+        fields.set("id", id)
+        try fields.encode(to: encoder)
     }
 }

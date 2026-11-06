@@ -100,4 +100,17 @@ struct EndpointURLBaselineTests {
         #expect(e.v2Execute == "https://example.com/proxy/v2/odoo/execute")
         #expect(e.v2Version == "https://example.com/proxy/v2/odoo/version")
     }
+
+    @Test("ODXBrain routes resolve under the gateway, including a subpath")
+    func brainRoutes() throws {
+        for (gateway, prefix) in [("https://gateway.odxproxy.io/", "https://gateway.odxproxy.io"),
+                                  ("https://example.com/proxy", "https://example.com/proxy")] {
+            var raw = gateway
+            if raw.hasSuffix("/") { raw = String(raw.dropLast()) }
+            let base = try #require(URL(string: raw))
+            #expect(base.appendingPathComponent("/brain/v1/resolve").absoluteString == prefix + "/brain/v1/resolve")
+            #expect(base.appendingPathComponent("/brain/v1/sops/resolve").absoluteString == prefix + "/brain/v1/sops/resolve")
+            #expect(base.appendingPathComponent("/brain/v1/info").absoluteString == prefix + "/brain/v1/info")
+        }
+    }
 }
